@@ -47,9 +47,36 @@ Injection possible dans le nom de la table ou des colonnes (parfois via des para
 Injection possible dans le champ de tri, surtout si le nom de la colonne est injecté dynamiquement.  
 *Exemple :* `SELECT * FROM users ORDER BY [column_injection];`
 
----
-
 **À retenir**  
 Les vulnérabilités SQLi ne se limitent pas à la clause WHERE ; toute partie d’une requête construite dynamiquement peut être une cible.
 
+---
+# Retrieving Hidden Data
+
+Quand aucune défense contre l’injection SQL n’est présente, il est possible de manipuler la requête pour afficher des données cachées.
+
+## Exemple d’injection avec commentaire SQL
+
+**Payload :**  
+`https://insecure-website.com/products?category=Gifts'--`
+
+**Requête SQL générée :**  
+`SELECT * FROM products WHERE category = 'Gifts'--' AND released = 1`
+
+**Explication :**  
+`--` indique un commentaire en SQL. Tout ce qui suit est ignoré, ce qui supprime le filtre `AND released = 1` et affiche tous les produits, même non publiés.
+
+## Exemple avec condition toujours vraie
+
+**Payload :**  
+`https://insecure-website.com/products?category=Gifts'+OR+1=1--`
+
+**Requête SQL générée :**  
+`SELECT * FROM products WHERE category = 'Gifts' OR 1=1--' AND released = 1`
+
+**Explication :**  
+`OR 1=1` est toujours vrai, donc tous les produits sont affichés, quelle que soit la catégorie.
+
+### Avertissement
+Ajouter `OR 1=1` dans une requête peut causer des dégâts si la même donnée est réutilisée dans des requêtes UPDATE ou DELETE, entraînant une perte de données accidentelle.
 
