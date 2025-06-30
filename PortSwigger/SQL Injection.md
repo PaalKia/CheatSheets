@@ -80,3 +80,30 @@ Quand aucune défense contre l’injection SQL n’est présente, il est possibl
 ### Avertissement
 Ajouter `OR 1=1` dans une requête peut causer des dégâts si la même donnée est réutilisée dans des requêtes UPDATE ou DELETE, entraînant une perte de données accidentelle.
 
+---
+
+# Subverting Application Logic
+
+Il est possible de contourner la vérification du mot de passe lors de la connexion en injectant un commentaire SQL pour supprimer la vérification dans la requête.
+
+
+## Exemple de requête de connexion classique
+
+SELECT * FROM users WHERE username = 'wiener' AND password = 'bluecheese'
+
+Si un utilisateur est retourné, la connexion est acceptée.
+
+
+## Exploitation de l’injection
+
+- Username : `administrator'--`
+- Password : (laisser vide)
+
+La requête devient alors :
+
+SELECT * FROM users WHERE username = 'administrator'--' AND password = ''
+
+Le `--` commente la suite de la requête, supprimant la vérification du mot de passe.  
+L’attaquant est ainsi connecté comme administrateur sans connaître le mot de passe.
+
+
