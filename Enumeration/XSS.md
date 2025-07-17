@@ -223,4 +223,76 @@ javascript:alert(1)
 - [PayloadBox – XSS Payloads](https://github.com/payloadbox/xss-payload-list)
 - [PortSwigger - XSS Cheat Sheet](https://portswigger.net/web-security/cross-site-scripting/cheat-sheet)
 
+---
+
+# Fonctions et Frameworks à Surveiller
+
+## Stored XSS (Stockée)
+
+- **Champs persistants** : commentaires, posts, messages, profils, tickets, signatures, descriptions.
+- **Zones d’affichage partagées** : fils d’actus, notifications, exports (CSV, PDF, etc).
+- **Logs internes / messages admin** (attaque contre staff).
+
+## Reflected XSS (Reflet)
+
+- **Paramètres GET/POST dans l’URL** : search, id, q, keyword, redirect, etc.
+- **Feedback immédiat** : résultats de recherche, confirmations, erreurs personnalisées.
+- **Headers HTTP réfléchis** : User-Agent, Referer, X-Forwarded-For.
+- **Paramètres d’URL redirigés**.
+
+## DOM XSS (JavaScript/Client-side)
+
+### Fonctions JS vulnérables classiques
+
+- **innerHTML, outerHTML**
+- **document.write(), document.writeln()**
+- **element.setAttribute()** (si valeur pas filtrée dans event, style, src, etc)
+- **element.insertAdjacentHTML()**
+- **element.append(), prepend(), after(), before()** (peuvent propager innerHTML derrière)
+- **eval(), setTimeout(), setInterval(), Function()** (si l’input user y passe, méfiance !)
+
+### Attributs/événements à surveiller
+
+- **onerror, onload, onclick, onfocus, onmouseover, onanimationstart** (tout attribut d’event handler JS)
+
+### Frameworks & Bibliothèques JS
+
+#### **jQuery**
+- **.html(), .append(), .prepend(), .after(), .before()**  
+  Injectent du HTML directement.
+- **$()** : peut injecter direct dans le DOM.
+- **.attr()** : injection possible sur des events ou src/href.
+- **$.get(), $.post()** : si résultats non échappés affichés.
+
+#### **AngularJS / Angular**
+- **ng-bind-html** : affiche du HTML *non échappé*.
+- **ng-app, ng-controller, ng-repeat, ng-include** : surveiller les interpolations avec {{ }}.
+- **$sce.trustAsHtml** : truste du code comme “sûr”.
+- **[innerHTML]** : Angular (v2+) — risque de XSS si non safe.
+- **bypassSecurityTrustHtml()** (dans DomSanitizer) : si mal utilisé, XSS possible.
+
+#### **ReactJS**
+- **dangerouslySetInnerHTML** : injection HTML brut, attention à tout input non filtré.
+- **useEffect** (avec du code basé sur l’input utilisateur).
+- **ref** (si utilisé pour manipuler le DOM direct).
+
+#### **Vue.js**
+- **v-html** : comme innerHTML, affiche HTML brut non filtré.
+- **$refs** + manipulation DOM directe.
+- **:is="userInput"** ou **:src="userInput"** : attention à l’interpolation dynamique d’éléments/props.
+
+#### **Handlebars / Mustache / EJS / Pug**
+- **triple moustache {{{var}}}** (Handlebars) : HTML non échappé.
+- **<%= var %>** (EJS) : affichage non échappé.
+
+#### **Other/Old School**
+- **document.cookie** / **localStorage** : si jamais affiché tel quel dans le DOM.
+- **window.location.hash / search** : utilisé tel quel dans du JS.
+
+## Checklist Code Review Fullstack
+
+- **Côté back** : echo, print, printf, res.send (Node), render_template sans échappement, mark_safe (Django), etc.
+- **Côté front** : toute fonction JS qui écrit dans le DOM, surtout si l’input vient du user.
+- **Librairies tierces** : templates, frameworks, jQuery plugins…
+
 
