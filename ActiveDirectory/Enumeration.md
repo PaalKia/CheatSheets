@@ -111,3 +111,72 @@ Liste tous les emails publics du domaine et devine la convention de nommage.
 
 ---
 
+# Initial Internal Domain Enumeration 
+
+## 1. Ecoute & identification passive sur le réseau
+
+`sudo -E wireshark`  
+Lance Wireshark pour capturer tout le trafic réseau, repérer ARP, MDNS, NBNS, LLMNR.
+
+`sudo tcpdump -i <interface> -w traffic.pcap`  
+Capture le trafic réseau dans un fichier à analyser plus tard.
+
+## 2. Analyse de paquets pour repérage de hosts/domaines
+
+`arp -a`  
+Affiche la table ARP et détecte les IP récemment vues (ARP requests).
+
+`strings traffic.pcap | grep -Ei "host|user|domain"`  
+Trouve des infos textuelles utiles dans la capture réseau.
+
+## 3. Ecoute LLMNR/NBT-NS/MDNS
+
+`sudo responder -I <interface> -A`  
+Ecoute passivement et analyse les requêtes LLMNR/NBT-NS/MDNS pour détecter des hosts et noms de domaine.
+
+## 4. Ping sweep (découverte de hosts actifs)
+
+`fping -asgq 172.16.5.0/23`  
+Ping tout le sous-réseau pour identifier les IP actives discrètement.
+
+## 5. Scan actif des hôtes trouvés
+
+`nmap -v -A -iL hosts.txt -oA nmap_enum`  
+Scan complet des IP détectées : ports/services, versions, OS, scripts AD/SMB/LDAP/Kerberos.
+
+`nmap -p 88,389,445,636,3268,3269,3389 <target>`  
+Scan rapide des ports AD classiques (Kerberos, LDAP, SMB, RDP…).
+
+## 6. Enumération des utilisateurs AD (sans credentials)
+
+`kerbrute userenum -d <DOMAIN.LOCAL> --dc <DC_IP> usernames.txt -o valid_ad_users`  
+Enumère les comptes valides via Kerberos Pre-Auth (ultra utile en interne).
+
+## 7. Découverte de services exposés/OS vulnérables
+
+`nmap --script smb-os-discovery,smb-enum-shares,smb-enum-users -p445 <target>`  
+Enumération avancée des partages, OS et utilisateurs via SMB.
+
+`nmap --script ldap* -p389 <target>`  
+Script Nmap pour enumérer le LDAP en mode anonyme (si permis).
+
+## 8. Identifier les DC, serveurs clés et conventions de nommage
+
+`nmap -sS -p88,389,445,636,3268,3269 --script krb5-enum-users --script-args krb5-enum-users.realm=<DOMAIN> <targets>`  
+Enumère utilisateurs Kerberos et repère DCs/domain controllers.
+
+## 9. Tri & documentation des résultats
+
+`grep -Ei 'Domain|Host|User|Computer' nmap_enum.nmap > summary.txt`  
+Filtre les résultats pour extraire les infos clés à documenter.
+
+## 10. Notes & bonnes pratiques
+
+- Toujours sauvegarder les .pcap, outputs Nmap, userlists trouvées.
+- Adapter le bruit des scans au contexte (non-évasif = OK / Red Team = privilégier le passif).
+- Prendre note des noms d’hôtes, conventions de nommage et schémas utilisateurs dès les premières étapes.
+- Identifier rapidement les systèmes obsolètes (Windows 7/2008) pour quick win (EternalBlue, MS08-067…).
+
+---
+
+
