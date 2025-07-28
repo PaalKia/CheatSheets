@@ -557,8 +557,59 @@ Cibles typiques :
 
 ---
 
+# Enumerating Security Controls
 
+Après avoir obtenu un accès, il est important d’énumérer les contrôles de sécurité en place, car ils peuvent affecter nos outils et méthodologie d’attaque AD.
 
+## Défenses typiques et comment les détecter
+
+### Windows Defender
+
+Defender (Microsoft Defender) bloque aujourd’hui nativement beaucoup d’outils pentest (ex: PowerView).  
+Pour vérifier s’il est actif :
+`Get-MpComputerStatus`
+
+**Vérifie la valeur de** `RealTimeProtectionEnabled` **: si True → Defender actif.**
+
+### AppLocker
+
+AppLocker est la solution Microsoft de whitelisting applicatif (autorise ou bloque des programmes/scripts).  
+Typiquement, certaines politiques bloquent `powershell.exe` mais oublient d’autres emplacements.  
+Pour lister la politique active :
+`Get-AppLockerPolicy -Effective | select -ExpandProperty RuleCollections`
+
+Regarder les règles **Deny** ou **Allow** et les chemins ciblés.
+
+### PowerShell Constrained Language Mode
+
+Ce mode limite fortement les capacités de PowerShell (pas de COM, types .NET limités, etc).
+Pour voir si nous sommes limité :
+`$ExecutionContext.SessionState.LanguageMode`
+
+- `ConstrainedLanguage` = mode limité  
+- `FullLanguage` = full PowerShell
+
+### LAPS (Local Administrator Password Solution)
+
+LAPS randomise et gère automatiquement les mots de passe admin locaux pour limiter la propagation latérale.  
+Avec le LAPSToolkit, on peux voir qui a accès à la lecture des mots de passe.
+
+Lister les groupes délégués à la lecture des passwords LAPS :
+`Find-LAPSDelegatedGroups`
+
+Lister les groupes/identités ayant les droits étendus sur LAPS :
+`Find-AdmPwdExtendedRights`
+
+Lister les machines avec LAPS et les mots de passe si notre user a le droit :
+`Get-LAPSComputers`
+
+## Points à retenir
+
+- Toujours checker les contrôles en place avant d’aller plus loin.
+- Adapter les outils et payloads si nécessaire (AppLocker, Defender, etc).
+- Les bypass seront à adapter selon la configuration (détection, whitelisting, etc).
+
+---
 
 
 
