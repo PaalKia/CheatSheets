@@ -691,5 +691,211 @@ Permet de collecter toutes les relations AD pour générer des graphes d’attaq
 
 ---
 
+# Credentialed Enumeration - from Windows
+
+## 1. ActiveDirectory PowerShell Module
+
+### Vérifier et importer le module :
+`Get-Module`
+`Import-Module ActiveDirectory`
+
+### Infos de base sur le domaine :
+`Get-ADDomain`
+
+### Chercher des users avec un SPN (pour Kerberoasting) :
+`Get-ADUser -Filter {ServicePrincipalName -ne "$null"} -Properties ServicePrincipalName`
+
+### Vérifier les trusts inter-domaines :
+`Get-ADTrust -Filter *`
+
+### Lister tous les groupes du domaine :
+`Get-ADGroup -Filter * | select name`
+
+### Infos détaillées sur un groupe :
+`Get-ADGroup -Identity "Backup Operators"`
+
+### Lister les membres d’un groupe :
+`Get-ADGroupMember -Identity "Backup Operators"`
+
+## 2. PowerView (PowerShell)
+
+> *De base, à importer en mémoire via IEX si pas déjà sur la machine.*
+
+### Infos sur un user :
+`Get-DomainUser -Identity mmorgan -Domain inlanefreight.local | Select-Object -Property name,samaccountname,description,memberof,whencreated,pwdlastset,lastlogontimestamp,accountexpires,admincount,userprincipalname,serviceprincipalname,useraccountcontrol`
+
+### Récursif : membres d’un groupe (Domain Admins par ex) :
+`Get-DomainGroupMember -Identity "Domain Admins" -Recurse`
+
+### Lister les trusts :
+`Get-DomainTrustMapping`
+
+### Tester si user courant est admin sur une machine :
+`Test-AdminAccess -ComputerName ACADEMY-EA-MS01`
+
+### Chercher les users avec SPN set :
+`Get-DomainUser -SPN -Properties samaccountname,ServicePrincipalName`
+
+> **Autres commandes PowerView utiles** :
+- `Get-DomainUser`
+- `Get-DomainComputer`
+- `Get-DomainGroup`
+- `Get-DomainOU`
+- `Get-DomainFileServer`
+- `Find-DomainUserLocation`
+- `Find-DomainShare`
+- `Find-LocalAdminAccess`
+
+## 3. SharpView (C#/.NET, alternatif à PowerView)
+
+> Peut s’utiliser si PowerShell est restrictif.
+
+### Help d’une méthode :
+`.\SharpView.exe Get-DomainUser -Help`
+
+### Infos sur un user :
+`.\SharpView.exe Get-DomainUser -Identity forend`
+
+## 4. Recherche et pillage de shares
+
+### Chasse aux shares (PowerView) :
+`Find-DomainShare`
+`Get-NetShare -ComputerName <hostname>`
+`Get-NetSession -ComputerName <hostname>`
+
+### Avec Snaffler (ciblage automatisé des fichiers sensibles) :
+`Snaffler.exe -s -d inlanefreight.local -o snaffler.log -v data`
+
+## 5. SharpHound / BloodHound
+
+### Collecte toutes les infos d’attaque (sur Windows) :
+`.\SharpHound.exe -c All --zipfilename ILFREIGHT`
+
+- Transférer ensuite le zip dans BloodHound GUI (lancer `bloodhound`, login neo4j: neo4j)
+- Upload le zip via l’interface, explorer les graphes et queries Analysis.
+
+**Queries utiles BloodHound :**
+- Find Shortest Paths to Domain Admins
+- Find Computers where Domain Users are Local Admin
+- Find Computers with Unsupported Operating Systems
+
+---
+
+# Living Off the Land (LOTL) 
+
+> Énumération d’Active Directory et de l’environnement Windows uniquement avec les commandes natives, sans outils externes ni téléchargements.
+
+## 1. Informations sur le système et l’environnement
+
+| Commande                        | Description                                         |
+|----------------------------------|----------------------------------------------------|
+| hostname                        | Affiche le nom de la machine                       |
+| systeminfo                      | Résumé complet de l’OS, réseau, Hotfix, hardware   |
+| [System.Environment]::OSVersion.Version | Version de Windows                      |
+| wmic qfe get Caption,Description,HotFixID,InstalledOn | Liste des hotfixes/patches appliqués   |
+| ipconfig /all                    | Config réseau détaillée (IP, DNS, adapters)        |
+| set                              | Variables d’environnement (CMD)                    |
+| echo %USERDOMAIN%                | Domaine de rattachement                            |
+| echo %logonserver%               | Contrôleur de domaine utilisé                      |
+| whoami                           | Compte courant                                     |
+
+## 2. PowerShell - Reco & OpSec
+
+| Commande                                             | Description                                               |
+|------------------------------------------------------|----------------------------------------------------------|
+| Get-Module                                           | Liste des modules PowerShell disponibles                 |
+| Get-ExecutionPolicy -List                            | État des stratégies d’exécution                         |
+| Set-ExecutionPolicy Bypass -Scope Process            | Contourne la policy dans le process courant              |
+| Get-ChildItem Env: \| ft Key,Value                   | Variables d’environnement PowerShell                     |
+| Get-Content $env:APPDATA\Microsoft\Windows\Powershell\PSReadline\ConsoleHost_history.txt | Affiche l’historique PowerShell du user |
+| Get-MpComputerStatus                                 | Statut et configuration de Windows Defender              |
+| powershell.exe -version 2                            | Lance PowerShell v2 (peu ou pas de logs, si dispo)       |
+
+**Note** : Utiliser PowerShell v2 peut désactiver la journalisation des scripts (event log 4104/400).
+
+## 3. État de la sécurité locale
+
+| Commande                                      | Description                                   |
+|-----------------------------------------------|----------------------------------------------|
+| netsh advfirewall show allprofiles            | État du pare-feu Windows (domain, private, public)   |
+| sc query windefend                            | Statut du service Windows Defender           |
+| Get-MpComputerStatus                          | Statut détaillé de Defender et signatures    |
+| qwinsta                                       | Sessions RDP/console actives sur la machine  |
+
+## 4. Informations réseau
+
+| Commande              | Description                                               |
+|-----------------------|----------------------------------------------------------|
+| arp -a                | Table ARP, hôtes connus sur le LAN                      |
+| route print           | Table de routage (segments réseau accessibles)           |
+| ipconfig /all         | (Déjà listé)                                            |
+
+## 5. WMI (Windows Management Instrumentation)
+
+| Commande                                                      | Description                                          |
+|---------------------------------------------------------------|------------------------------------------------------|
+| wmic qfe get Caption,Description,HotFixID,InstalledOn         | Hotfixes installés                                   |
+| wmic computersystem get Name,Domain,Manufacturer,Model,Username,Roles /format:List | Infos hôte |
+| wmic process list /format:list                                | Liste des processus en cours                         |
+| wmic ntdomain list /format:list                               | Infos domaines, contrôleurs de domaine               |
+| wmic useraccount list /format:list                            | Comptes locaux/domaines ayant déjà loggé             |
+| wmic group list /format:list                                  | Infos sur les groupes locaux                         |
+| wmic sysaccount list /format:list                             | Comptes systèmes (services)                          |
+
+## 6. Net Commands (CMD)
+
+| Commande                                    | Description                                             |
+|---------------------------------------------|--------------------------------------------------------|
+| net accounts                                | Politique locale de mot de passe                       |
+| net accounts /domain                        | Politique de mot de passe du domaine                   |
+| net group /domain                           | Liste des groupes du domaine                           |
+| net group "Domain Admins" /domain           | Liste des Domain Admins                                |
+| net group "domain computers" /domain        | Liste des ordinateurs du domaine                       |
+| net group "Domain Controllers" /domain      | Liste des DC du domaine                                |
+| net groups /domain                          | Tous les groupes du domaine                            |
+| net localgroup                              | Groupes locaux                                         |
+| net localgroup administrators /domain       | Admins du domaine                                      |
+| net localgroup Administrators               | Admins locaux                                          |
+| net share                                   | Shares accessibles sur la machine                      |
+| net user <ACCOUNT_NAME> /domain             | Infos sur un user AD                                   |
+| net user /domain                            | Tous les users du domaine                              |
+| net user %username%                         | Infos user courant                                     |
+| net use x: \\computer\share                 | Monter un partage réseau                               |
+| net view                                    | Liste des machines connues                             |
+| net view /all /domain[:domainname]          | Shares sur le domaine                                  |
+| net view \\computer /ALL                    | Shares sur une machine spécifique                      |
+| net view /domain                            | Liste des PC du domaine                                |
+
+**Astuce** : remplacer `net` par `net1` pour contourner certains audits/logs.
+
+## 7. Dsquery (si installé - Windows Server tools)
+
+| Commande                                                                                  | Description                                        |
+|------------------------------------------------------------------------------------------|----------------------------------------------------|
+| dsquery user                                                                             | Tous les utilisateurs AD                            |
+| dsquery computer                                                                         | Tous les ordinateurs AD                             |
+| dsquery * "CN=Users,DC=INLANEFREIGHT,DC=LOCAL"                                           | Objets dans une OU                                 |
+| dsquery * -filter "(&(objectCategory=person)(objectClass=user)(userAccountControl:1.2.840.113556.1.4.803:=32))" -attr distinguishedName userAccountControl | Utilisateurs avec PASSWD_NOTREQD                   |
+| dsquery * -filter "(userAccountControl:1.2.840.113556.1.4.803:=8192)" -limit 5 -attr sAMAccountName | DCs AD (limité à 5 résultats)           |
+
+**LDAP/OID cheatsheet** :
+- `1.2.840.113556.1.4.803` : attribut DOIT correspondre strictement
+- `1.2.840.113556.1.4.804` : attribut correspond à AU MOINS un bit
+- `1.2.840.113556.1.4.1941` : recherche récursive dans DNs
+
+**Opérateurs logiques LDAP :**  
+- `&` (AND), `|` (OR), `!` (NOT)
+
+## 8. Divers
+
+- Toutes les commandes PowerShell, net, wmic, dsquery peuvent être scriptées et automatisées dans des fichiers batch ou PS1.
+- Le recours exclusif à ces commandes limite l’exposition et le bruit sur le réseau.
+- Vérifier les logs Event Viewer : PowerShell, sécurité, applications, Windows Defender, pour toute trace ou anomalie potentielle liée à l’activité d’énumération.
+- Dsquery, wmic et net peuvent être bloqués ou monitorés par les EDR avancés.
+
+---
+
+
+
 
 
