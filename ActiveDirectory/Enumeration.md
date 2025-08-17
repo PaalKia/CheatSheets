@@ -1,4 +1,3 @@
-
 # Active Directory External Recon
 
 ## 1. ASN/IP Space Enumeration
