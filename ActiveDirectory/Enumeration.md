@@ -1918,6 +1918,92 @@ Get-GPO -Guid <guid>
 ---
 
 
+# Domain Trusts Primer
+
+## Domain Trusts Overview
+
+Un **trust** établit une authentification inter-domaines (intra-forêt ou inter-forêts), permettant à des utilisateurs d’accéder à des ressources en dehors de leur domaine d’origine.
+
+### Types de trusts :
+
+- **Parent-child** : Relation transitive bidirectionnelle entre un domaine parent et un domaine enfant (ex. `corp.inlanefreight.local` <-> `inlanefreight.local`).
+- **Cross-link** : Trust entre domaines enfants pour accélérer l’authentification.
+- **External** : Trust non transitif entre deux domaines séparés appartenant à des forêts distinctes. Utilise le SID filtering.
+- **Tree-root** : Trust transitive bidirectionnelle entre une forêt racine et un nouveau tree root.
+- **Forest** : Trust transitive entre deux forêts racines.
+- **ESAE (bastion forest)** : Forêt dédiée à la gestion sécurisée d’AD.
+
+### Transitive vs Non-Transitive
+
+- **Transitive** : la confiance est propagée.  
+  Exemple : si `DomainA` fait confiance à `DomainB` et `DomainB` à `DomainC`, alors `DomainA` fait automatiquement confiance à `DomainC`.  
+- **Non-transitive** : la confiance est directe et non héritée.  
+
+### Direction du trust
+
+- **One-way** : les utilisateurs du domaine "trusted" accèdent au domaine "trusting", pas l’inverse.  
+- **Bidirectional** : accès dans les deux sens.  
+  Exemple : `INLANEFREIGHT.LOCAL` <-> `FREIGHTLOGISTICS.LOCAL`.
+
+## Enumeration des Trusts
+
+### Avec Get-ADTrust
+
+```powershell
+Import-Module activedirectory
+Get-ADTrust -Filter *
+```
+
+### Avec PowerView
+
+```powershell
+Get-DomainTrust
+```
+
+Retourne : source, target, type (parent/child, forest, external), direction, attributs.  
+
+Exemple de mapping :
+
+```powershell
+Get-DomainTrustMapping
+```
+
+Résultats :  
+- `INLANEFREIGHT.LOCAL` ↔ `LOGISTICS.INLANEFREIGHT.LOCAL` (WITHIN_FOREST, Bidirectional)  
+- `INLANEFREIGHT.LOCAL` ↔ `FREIGHTLOGISTICS.LOCAL` (FOREST_TRANSITIVE, Bidirectional)
+
+### Enumération utilisateurs dans un domaine enfant
+
+```powershell
+Get-DomainUser -Domain LOGISTICS.INLANEFREIGHT.LOCAL | select SamAccountName
+```
+### Avec Netdom
+
+Lister les trusts :
+
+```cmd
+netdom query /domain:inlanefreight.local trust
+```
+
+Lister les DC :
+
+```cmd
+netdom query /domain:inlanefreight.local dc
+```
+
+Lister les workstations/serveurs :
+
+```cmd
+netdom query /domain:inlanefreight.local workstation
+```
+
+## Visualisation avec BloodHound
+
+- Fonctionnalité "Map Domain Trusts".
+- Permet de visualiser les trusts bidirectionnels, les chemins de pivot et les relations entre domaines.
+
+---
+
 
 
 
