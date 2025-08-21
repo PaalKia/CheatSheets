@@ -222,6 +222,7 @@ javascript:alert(1)
 - [PayloadAllTheThings – XSS](https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/XSS%20Injection)
 - [PayloadBox – XSS Payloads](https://github.com/payloadbox/xss-payload-list)
 - [PortSwigger - XSS Cheat Sheet](https://portswigger.net/web-security/cross-site-scripting/cheat-sheet)
+- [Webhook - Alternative Ngrok](https://webhook.site/#!/)
 
 ---
 
