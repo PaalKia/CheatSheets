@@ -9,7 +9,8 @@
   - `{{7*7}}` → `49` (Jinja2, Twig…)  
   - `${7*7}` → `49` (Freemarker, JSP EL, Velocity…)  
   - `<%= 7*7 %>` (ERB, JSP)  
-  - `#{7*7}` (Ruby ERB, Groovy GSP)  
+  - `#{7*7}` (Ruby ERB, Groovy GSP)
+    - Exécuter du code --> `<%= system("ls") %>`   
 - Indices → si sortie contient une **erreur serveur** ou un résultat numérique inattendu.  
 
 ## Identification du moteur
