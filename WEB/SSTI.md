@@ -22,6 +22,9 @@
     - Erreur sinon.  
 - Erreurs verboses révèlent souvent le moteur (Twig, Velocity, Smarty…).  
 
+<img width="640" height="386" alt="template-decision-tree" src="https://github.com/user-attachments/assets/6c6ebe9f-fa42-4bcf-9b09-5720d9a575a9" />
+
+
 ## Exploitation par moteur
 
 ### Python (Jinja2)
