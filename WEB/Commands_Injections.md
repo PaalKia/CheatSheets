@@ -371,3 +371,67 @@ Exemple :
 
 ---
 
+# Evasion Tools
+
+## Objectif
+Automatiser l’obfuscation des commandes pour contourner les filtres avancés ou WAFs.  
+➡️ Exemple Linux : **Bashfuscator**  
+➡️ Exemple Windows : **DOSfuscation**
+
+## Linux — Bashfuscator
+
+### Installation
+- `git clone https://github.com/Bashfuscator/Bashfuscator`  
+- `cd Bashfuscator`  
+- `pip3 install setuptools==65`  
+- `python3 setup.py install --user`
+
+### Utilisation basique
+- `cd ./bashfuscator/bin/`  
+- `./bashfuscator -h` → affiche le menu d’aide  
+- `./bashfuscator -c 'cat /etc/passwd'`
+
+⚠️ Génère parfois des payloads énormes (parfois >1M caractères).
+
+### Version simplifiée
+- `./bashfuscator -c 'cat /etc/passwd' -s 1 -t 1 --no-mangling --layers 1`
+
+Exemple de sortie :  
+`eval "$(W0=(w \  t e c p s a \/ d);for Ll in ...;{ printf %s "${W0[$Ll]}";};)"`
+
+## Windows — DOSfuscation
+
+### Installation
+- `git clone https://github.com/danielbohannon/Invoke-DOSfuscation.git`  
+- `cd Invoke-DOSfuscation`  
+- `Import-Module .\Invoke-DOSfuscation.psd1`  
+- `Invoke-DOSfuscation`
+
+### Menu interactif
+- `help` → affiche l’aide  
+- Options :  
+  - **BINARY** → syntaxe obfusquée pour cmd.exe / powershell.exe  
+  - **ENCODING** → encodage via variables d’environnement  
+  - **PAYLOAD** → obfuscation directe de payload  
+
+### Exemple
+```
+Invoke-DOSfuscation> SET COMMAND type C:\Users\htb-student\Desktop\flag.txt
+Invoke-DOSfuscation> encoding
+Invoke-DOSfuscation\Encoding> 1
+```
+
+Sortie générée :  
+`typ%TEMP:~-3,-2% %CommonProgramFiles:~17,-11%:\Users\h%TMP:~-13,-12%b-stu...`
+
+
+## Notes pratiques
+- **Bashfuscator** → Linux, combine quotes, variables, reverse, encodage.  
+- **DOSfuscation** → Windows (CMD & PowerShell), encodage via variables.  
+- Utiles quand les techniques manuelles (quotes, IFS, base64, etc.) échouent.
+
+## Ressources
+- [Bashfuscator — GitHub](https://github.com/Bashfuscator/Bashfuscator)  
+- [Invoke-DOSfuscation — GitHub](https://github.com/danielbohannon/Invoke-DOSfuscation)
+
+---
