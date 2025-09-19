@@ -287,7 +287,7 @@ ruby XXEinjector.rb \
 - **XXEinjector** simplifie et automatise toutes les étapes.  
 
 Ressources : 
-[XXEinjector](https://github.com/enjoiz/XXEinjector)
+- [XXEinjector](https://github.com/enjoiz/XXEinjector)
 
 
 
