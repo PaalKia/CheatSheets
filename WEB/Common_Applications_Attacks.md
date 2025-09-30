@@ -665,6 +665,46 @@ p.waitFor()
 
 ---
 
+# Infrastructure/Network Monitoring Tools
+---
+
+# Splunk - Discovery & Enumeration
+
+## Discovery / Footprinting
+- Ports/services courants :
+  - Web UI : `8000` (Splunk Web)
+  - Management / REST API : `8089`
+- Commande utile (recon passive) :
+  - `nmap -sV -p 8000,8089 <target>`
+- Valeurs par défaut / faiblesse fréquente :
+  - Anciennes installations : identifiants `admin:changeme`
+  - Période d'essai -> conversion automatique en version Free (parfois sans authentification)
+
+## Enumeration
+- Si accès à l'UI : parcourir les Apps installées (Splunkbase), inputs configurés, alerting, et dashboards.
+- Vérifier la présence de :
+  - Scripted inputs (inputs exécutant des scripts périodiquement)
+  - Alert scripts / saved searches qui exécutent du code côté serveur
+  - Applications custom ou téléchargées depuis Splunkbase
+- API : la REST API (port `8089`) permet d'interroger la configuration si authentification insuffisante.
+
+## Risque principal & vecteurs d'abus
+- **Scripte inputs / alert scripts** : mécanisme prévu pour exécution périodique de scripts (bash, python, powershell...). Si l'instance est accessible en écriture, on peut configurer un input qui exécute un script arbitraire -> exécution côté serveur.
+- **Apps custom** : installer ou déployer une app mal configurée peut permettre d'exécuter code.
+- **REST API / SSRF** : anciennes vulnérabilités ou mauvaise configuration peuvent exposer endpoints internes.
+- **Compte admin / creds faibles** : accès admin permet déployer apps, inputs, et modifier config.
+
+> Remarque : l'impact dépend de l'OS et du contexte d'exécution (Splunk souvent lancé en tant que `root` sur Linux ou `SYSTEM` sur Windows dans certaines déploiements).
+
+## Exploitation
+- Approche générique : si vous obtenez des droits suffisants via l'UI (admin ou équivalent), vous pouvez :
+  - ajouter / modifier un scripted input pour exécuter un script contrôlé,
+  - installer une app contenant un script ou composant exécutable,
+  - exploiter des endpoints REST exposés si vulnérables.
+- Toujours vérifier la version de Splunk et les CVE publiés (les vulnérabilités exploitables sont généralement version-spécifiques)
+
+---
+
 
 
 
