@@ -845,7 +845,7 @@ Méthodo concise pour détecter et énumérer une instance GitLab (footprint →
 
 ---
 
-# GitLab - Attacking (cheat-sheet)
+# GitLab - Attacking 
 
 ## Objectif
 Actions concises pour passer de l'énumération à l'exploitation (RCE) quand possible.
@@ -970,4 +970,66 @@ Actions concises pour passer de l'énumération à l'exploitation (RCE) quand po
 - Vérifier et durcir exposition des endpoints CGI.
 
 ---
+
+# Thick Client Applications
+
+---
+
+# Attacking Thick Client Applications
+
+## Objectif
+- Rappel rapide : trouver creds/clefs, extraire binaires/ressources, pivot local → réseau.  
+- Outils essentiels: ProcMon, x64dbg, dnSpy, de4dot, Ghidra, Wireshark, Burp.
+
+## Recon
+- Détecter stack : **.NET / Java / C++**.  
+- Archi : **2-tier** vs **3-tier**.  
+- Outils : `CFF Explorer`, `Detect It Easy`, `strings`, `ProcMon`, `TCPView`.
+
+## Client-side
+- Chercher : **hardcoded creds, tokens, configs, DLL hijack, fichiers temp**.  
+- Flux rapide : `strings` → dump mémoire → `de4dot` (NET) → `dnSpy`.  
+- Runtime : `ProcMon` (IO), `x64dbg` (memory map), `Frida` (hooking).
+
+## Network
+- Interception/proxy : `Burp Suite`.  
+- Sniffing : `Wireshark` / `tcpdump`.  
+- Vérifier trafic en clair, tokens exposés, possibilité d’injection.
+
+## Server
+- Tester endpoints découverts par le client (OWASP Top10).  
+- Priorité : auth bypass, SQLi, RCE selon API.
+
+## Workflow
+1. Lancer binaire → monitorer `ProcMon`.  
+2. Protéger Temp pour capturer fichiers temporaires.  
+3. Récupérer base64/PS1 → reconstruire EXE.  
+4. `x64dbg` → Dump Memory → `strings` → détecter .NET.  
+5. `de4dot` → `dnSpy` → lire code → extraire creds.
+
+## Post-exploitation
+- Récupérer : configs (`%AppData%`, `C:\ProgramData`), clés, tokens.  
+- Rechercher services / tâches planifiées → élévation / pivot.
+
+## Contre-mesures
+- Pas de creds hardcodés (vaults).  
+- Signature & vérification du code.  
+- Chiffrement stockage local, distribution centralisée.
+
+## Outils clés
+- Static : `CFF Explorer`, `DIE`, `strings`, `de4dot`, `dnSpy`, `JADX`, `Ghidra`.  
+- Dynamic : `ProcMon`, `x64dbg`, `Frida`, `Wireshark`, `Burp Suite`.
+
+---
+
+
+
+
+
+
+
+
+
+
+
 
