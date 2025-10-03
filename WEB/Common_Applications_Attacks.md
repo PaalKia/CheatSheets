@@ -1022,6 +1022,46 @@ Actions concises pour passer de l'énumération à l'exploitation (RCE) quand po
 
 ---
 
+# Exploiting Web Vulnerabilities in Thick-Client Applications 
+
+## Objectif
+- Exploiter failles web accessibles via un client lourd (path traversal, SQLi, extraction de binaires/configs) pour obtenir foothold et privilèges.
+
+## Prérequis
+- Autorisation + VM snapshot.  
+- Outils : `Wireshark`, `JD-GUI`/`jdcli`, `jar`, `javac`, `strings`, `dnSpy`/`jd-gui`, `Burp`.
+
+## Découverte rapide
+- Inspecter FTP/partage → récupérer `fatty-client.jar`, notes (port, creds `qtc/clarabibi`).  
+- Sniffer login → confirmer host/port (Wireshark).  
+- Ajouter entrée hosts pour rediriger domaine client :  
+  - `echo 10.10.10.174 server.fatty.htb >> C:\Windows\System32\drivers\etc\hosts`
+
+## Modifier port durci dans le JAR
+1. Extraire JAR (`unzip` ou explorer).  
+2. Rechercher `8000` → `beans.xml` → changer en `1337`.  
+3. Supprimer signatures (META-INF/*.SF, *.RSA) et sections SHA-256 de `META-INF/MANIFEST.MF`.  
+4. Rebuild JAR :  
+   - `cd fatty-client`  
+   - `jar -cmf META-INF/MANIFEST.MF ..\fatty-client-new.jar *`  
+5. Lancer ; login `qtc/clarabibi`.
+
+## Récupérer fichiers distants via client (technique)
+- Décompiler client (JD-GUI), repérer méthode `open` / `showFiles` dans `Invoker`.  
+- Modifier pour écrire `response.getContent()` en local (FileOutputStream → Desktop).  
+- Recompiler (`javac`), injecter `.class` modifiées dans le JAR, rebuild.  
+- Utiliser FileBrowser → télécharger `fatty-server.jar` pour analyse.
+
+## Path Traversal (approche)
+- Tester `../../../../etc/passwd`. Si `/` filtré, inspecter code client serveur (decompile).  
+- Localiser fonction qui transmet le chemin (ex : `showFiles(folder)`) → modifier client pour envoyer `..` ou `../logs` selon contrainte.  
+- Rebuild client et lister `/configs/../` pour découvrir fichiers sensibles.
+
+## SQL Injection (essentiel)
+- Dans server, login utilise :  
+  `SELECT ... FROM users WHERE username='` + user.getUsername() + `'` (non sanitizé).  
+- Hash côté client = `sha256(username + password + "clarabibimakeseverythingsecure")`.  
+- Contournement via UNION : créer fake row contrôlée. Exemple payload username :  
 
 
 
