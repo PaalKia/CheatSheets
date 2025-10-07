@@ -2,7 +2,7 @@
 
 ---
 
-# Environment Enumeration — Cheat Sheet
+# Environment Enumeration
 
 ## Objectif
 Obtenir un maximum d’informations sur le système compromis (OS, kernel, services, utilisateurs, fichiers sensibles, etc.) pour identifier des vecteurs d’escalade de privilèges.
