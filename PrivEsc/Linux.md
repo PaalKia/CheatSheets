@@ -322,7 +322,7 @@ known_hosts
 # Environment-based Privilege Escalation
 
 ---
-# Path Abuse — Cheat Sheet
+# Path Abuse
 
 ## Objectif
 Exploiter des failles liées à la variable d’environnement **PATH** pour exécuter un script malveillant à la place d’un binaire légitime, et ainsi obtenir une escalade de privilèges ou une exécution arbitraire de code.
