@@ -221,10 +221,78 @@ ou
 
 ---
 
+# Communication with Processes
 
+## Objectif  
+Comprendre comment les processus communiquent permet souvent d’identifier des **vecteurs d’escalade de privilèges**, via :
+- Services réseau exposés localement (ports internes, API non sécurisées)  
+- Named Pipes mal configurées (droits en écriture pour “Everyone”)  
+- Tokens ou communications inter-process mal protégées  
 
+## Access Tokens  
+Chaque processus Windows possède un **token d’accès** qui définit :
+- L’identité de l’utilisateur  
+- Ses privilèges (`SeImpersonatePrivilege`, `SeDebugPrivilege`, etc.)  
 
+Ces tokens peuvent être détournés pour obtenir des privilèges SYSTEM via des exploits comme **Juicy/Rogue Potato**.
 
+## Network Services  
+
+### Lister connexions et ports actifs  
+`netstat -ano`  
+→ Montre tous les ports TCP/UDP, états, et PID associés.  
+Chercher :
+- Ports locaux (`127.0.0.1` / `::1`) **non exposés** sur l’interface publique.  
+- Services internes comme `FileZilla`, `Splunk`, `RabbitMQ`, `IIS`, etc.  
+> Ces services sont souvent mal sécurisés car jugés “non exposés au réseau”.
+
+Exemples classiques :  
+- `127.0.0.1:14147` → interface admin FileZilla (extraction de mots de passe possible).  
+- `Splunk Universal Forwarder` → exécution de code sans auth (ancien bug).  
+- `Erlang Port 25672` (RabbitMQ, CouchDB, etc.) → cookies faibles (`rabbit`) exposés.  
+
+## Named Pipes  
+
+### Principe  
+Les **Named Pipes** sont des canaux de communication entre processus :  
+- `\\.\pipe\<nom>`  
+- Peuvent être **half-duplex** (écriture seule) ou **duplex** (lecture/écriture).  
+> Cobalt Strike les utilise massivement (ex : `\\.\pipe\msagent_12`).
+
+### Lister les Named Pipes  
+`pipelist.exe /accepteula`  
+ou  
+`powershell gci \\.\pipe\`  
+
+→ Montre les pipes actives (ex : `lsass`, `spoolss`, `vmware-usbarbpipe`, etc.).  
+> Chercher les pipes non standards ou en lien avec des services tiers.
+
+### Vérifier les permissions sur une pipe  
+`accesschk.exe /accepteula \\.\pipe\<nom> -v`  
+
+Exemple :  
+`accesschk.exe /accepteula \\.\pipe\lsass -v`  
+→ Seuls les administrateurs ont accès complet.  
+> Si “Everyone” a `WRITE` ou `FILE_ALL_ACCESS`, c’est exploitable.
+
+### Rechercher des pipes vulnérables  
+`accesschk.exe -accepteula -w \pipe\* -v`  
+→ Lister les pipes accessibles en écriture.  
+Exemple :  
+
+```
+RW Everyone FILE_ALL_ACCESS
+```
+Cela signifie que **tous les utilisateurs** peuvent écrire dedans → escalade SYSTEM possible. 
+
+## Points clés à retenir
+- Les **ports internes** (loopback) sont de bons candidats à exploiter (admin interfaces, API locales).
+- Les **Named Pipes** sont une surface d’attaque souvent négligée.
+- Utiliser **AccessChk** pour vérifier les permissions (`RW Everyone`). 
+- Toujours recouper PID ↔ Processus via `tasklist /svc` ou `Get-Process`. 
+- Si un service tourne avec `SeImpersonatePrivilege` → testez les *Potato exploits*.
+
+--- 
 
 
 
