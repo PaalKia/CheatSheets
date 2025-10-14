@@ -132,6 +132,94 @@ Commande PowerShell :
 ---
 
 
+# Initial Enumeration
+
+## Objectif
+Après avoir obtenu un shell basique sur un hôte Windows, le but est de **collecter un maximum d’informations** sur :
+- le système et sa version,  
+- les utilisateurs/groupes,  
+- les services et logiciels,  
+- les protections et chemins d’escalade possibles.  
+
+Une bonne énumération manuelle = escalade plus rapide et moins risquée.
+
+## Infos système
+
+### Version et patchs
+`systeminfo`  
+→ Donne OS, build, patchs (KB), uptime, matériel, domaine, etc.  
+> Si peu de hotfixes récents → possible vulnérabilité kernel/exploit public.
+
+### Liste des correctifs
+`wmic qfe`  
+ou  
+`powershell Get-HotFix | ft -AutoSize`
+
+### Infos matérielles et programmes
+`wmic product get name`  
+ou  
+`powershell Get-WmiObject -Class Win32_Product | select Name, Version`  
+> Identifier logiciels vulnérables (Java, SQL Server, FileZilla, etc.).
+
+## Services & processus
+
+### Lister processus et services associés
+`tasklist /svc`  
+→ Identifier services privilégiés ou inhabituels (ex : `FileZilla Server.exe`, `IISADMIN`, etc.).  
+> Chercher ceux exécutés comme `SYSTEM` ou `Administrator`.
+
+### Voir ports ouverts / services exposés
+`netstat -ano`  
+→ Permet de repérer des services internes exploitables.
+
+## Variables & configuration
+
+### Lister variables d’environnement
+`set`  
+→ Vérifier `PATH`, `HOMEDRIVE`, `USERPROFILE`, etc.  
+> Si un dossier *writable* est avant `C:\Windows\System32` → possible DLL hijacking.
+
+## Utilisateurs & groupes
+
+### Utilisateur actuel
+`echo %USERNAME%`  
+ou  
+`whoami`
+
+### Privilèges de l’utilisateur
+`whoami /priv`  
+→ Repérer privilèges sensibles (`SeImpersonatePrivilege`, etc.).
+
+### Groupes de l’utilisateur
+`whoami /groups`  
+→ Vérifier appartenance à `Administrators`, `Remote Desktop Users`, etc.
+
+### Utilisateurs connectés
+`query user`  
+→ Voir sessions actives (ex : `administrator` connecté via RDP).
+
+### Lister tous les utilisateurs
+`net user`
+
+### Lister tous les groupes
+`net localgroup`
+
+### Détails d’un groupe (ex : Administrators)
+`net localgroup administrators`
+
+## Politique de mots de passe
+`net accounts`  
+→ Donne longueur min, âge max, verrouillage, etc.  
+> Faible complexité = brute force possible.
+
+## Points clés à surveiller
+- Services tiers tournant en SYSTEM.  
+- Logiciels obsolètes (Java, SQL, etc.).  
+- Variables PATH modifiées.  
+- Comptes admin ou “helpdesk” réutilisés.  
+- Politiques faibles (mot de passe / verrous).
+
+---
 
 
 
