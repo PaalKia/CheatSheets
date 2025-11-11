@@ -351,7 +351,7 @@ Crack NetNTLMv2 capturés avec Hashcat (identique à la version Linux).
 ## 3. LDAP anonymous bind (Linux)
 
 - ldapsearch :  
-  `ldapsearch -h <dc_ip> -x -b "DC=DOM,DC=LOCAL" -s sub "*" | grep -m 1 -B 10 pwdHistoryLength`
+  `ldapsearch -H ldap://<dc_ip> -x -b "DC=DOM,DC=LOCAL" -s sub "*" | grep -m 1 -B 10 pwdHistoryLength`
 
 ## 4. Avec credentials (Windows)
 
