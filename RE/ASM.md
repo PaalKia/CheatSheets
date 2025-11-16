@@ -976,3 +976,964 @@ Ordre à push:  0x78, 0x56, 0x34, 0x12
 
 ---
 
+# Assembling & Debugging
+
+# Structure des Fichiers Assembly
+
+## Exemple: Hello World!
+
+### Code Complet
+```nasm
+         global  _start
+
+         section .data
+message: db      "Hello HTB Academy!"
+
+         section .text
+_start:
+         mov     rax, 1
+         mov     rdi, 1
+         mov     rsi, message
+         mov     rdx, 18
+         syscall
+
+         mov     rax, 60
+         mov     rdi, 0
+         syscall
+```
+
+**Résultat:** Affiche "Hello HTB Academy!" à l'écran
+
+## Structure Générale
+
+### Vue d'Ensemble
+```
+┌─────────────────────────────────────────┐
+│         global _start                   │ ← Directive
+├─────────────────────────────────────────┤
+│         section .data                   │ ← Section Data
+│ message: db "Hello HTB Academy!"        │   (Variables)
+├─────────────────────────────────────────┤
+│         section .text                   │ ← Section Text
+│ _start:                                 │   (Code)
+│         mov rax, 1                      │
+│         syscall                         │
+└─────────────────────────────────────────┘
+```
+
+## Anatomie d'une Ligne
+
+### 3 Éléments par Ligne
+```
+Label:     Instruction    Operand(s)
+  ↓            ↓             ↓
+message:      db      "Hello World!"
+_start:       mov         rax, 1
+              syscall
+```
+
+| Élément | Description | Obligatoire |
+|---------|-------------|-------------|
+| **Label** | Référence pour instructions/directives | Non |
+| **Instruction** | Commande à exécuter | Oui |
+| **Operand(s)** | Arguments de l'instruction (0-3) | Dépend |
+
+## Trois Sections Principales
+
+### 1️⃣ Directive `global _start`
+
+```nasm
+global _start
+```
+
+**Fonction:** Indique où commence l'exécution du code
+
+- Pointe vers le label `_start`
+- Première ligne du fichier (conventionnellement)
+- Machine commence l'exécution à `_start`
+
+### 2️⃣ Section `.data` (Variables)
+
+```nasm
+section .data
+message: db "Hello HTB Academy!"
+length:  equ $-message
+```
+
+**Fonction:** Contient toutes les variables
+
+**Caractéristiques:**
+- Chargée dans le **segment Data** de la RAM
+- Permissions: **Lecture/Écriture** (R/W)
+- **Non-exécutable** (protection mémoire)
+- Variables chargées **avant** l'exécution de `_start`
+
+### 3️⃣ Section `.text` (Code)
+
+```nasm
+section .text
+_start:
+    mov rax, 1
+    syscall
+```
+
+**Fonction:** Contient toutes les instructions Assembly
+
+**Caractéristiques:**
+- Chargée dans le **segment Text** de la RAM
+- Permissions: **Lecture seule** (R-X)
+- **Exécutable** mais non-modifiable
+- Protection contre buffer overflow
+- `_start` = point d'entrée conventionnel
+
+## Définition de Variables
+
+### Instructions de Définition
+
+| Instruction | Type | Description | Exemple |
+|-------------|------|-------------|---------|
+| **db** | Define Byte | Liste d'octets | `db 0x0A` |
+| **dw** | Define Word | Liste de mots (2 bytes) | `dw 0x1234` |
+| **dd** | Define Double | Liste de doubles (4 bytes) | `dd 0x12345678` |
+
+### Exemples Pratiques
+
+#### Définir un Byte
+```nasm
+newline: db 0x0a           ; Caractère nouvelle ligne
+```
+
+#### Définir une Liste de Bytes
+```nasm
+message: db 0x41, 0x42, 0x43, 0x0a   ; "ABC\n"
+```
+
+#### Définir une String
+```nasm
+message: db "Hello World!", 0x0a     ; "Hello World!\n"
+```
+
+#### Calculer une Longueur
+```nasm
+section .data
+    message db "Hello World!", 0x0a
+    length  equ $-message            ; length = 13
+```
+
+## 🔢 Token `$` et Instruction `equ`
+
+### Le Token `$`
+```
+$ = distance depuis le début de la section courante
+```
+
+**Exemple:**
+```nasm
+section .data
+    message db "Hello"    ; Position 0
+    length  equ $-message ; $ est à position 5
+                          ; length = 5 - 0 = 5
+```
+
+### Instruction `equ`
+
+```nasm
+constant_name equ expression
+```
+
+**Caractéristiques:**
+- Définit une **constante** (non modifiable)
+- Évalue une expression
+- Utilisé principalement pour calculer longueurs
+
+**Exemples:**
+```nasm
+; Longueur d'une string
+message db "Test"
+msg_len equ $-message      ; msg_len = 4
+
+; Constante numérique
+MAX_SIZE equ 100
+```
+
+## Labels
+
+### Définition
+```nasm
+label_name:
+    instruction operands
+```
+
+**Usages:**
+- Référencer des variables
+- Marquer des points dans le code
+- Définir des fonctions/boucles
+- Point d'entrée (`_start`)
+
+**Exemples:**
+```nasm
+; Label de variable
+message: db "Hello"
+
+; Label de code
+_start:
+    mov rax, 1
+
+; Label de boucle
+loop_start:
+    dec rcx
+    jnz loop_start
+```
+
+## Commentaires
+
+### Syntaxe
+```nasm
+; Ceci est un commentaire
+mov rax, 1    ; Commentaire en fin de ligne
+```
+
+**Bonnes Pratiques:**
+```nasm
+; Initialiser syscall write
+mov rax, 1        ; syscall number pour sys_write
+mov rdi, 1        ; file descriptor (stdout)
+mov rsi, message  ; pointeur vers le message
+mov rdx, 18       ; longueur du message
+syscall           ; appel système
+```
+
+**Avantages:**
+- ✅ Explique le but du code
+- ✅ Facilite la relecture future
+- ✅ Aide au débogage
+- ✅ Documentation intégrée
+
+## Protections Mémoire
+
+### Séparation Data/Text
+
+```
+┌────────────────────────────────┐
+│      Section .data             │
+│  Permissions: R/W              │
+│  Exécutable: NON ❌            │
+│  Usage: Variables              │
+├────────────────────────────────┤
+│      Section .text             │
+│  Permissions: R-X              │
+│  Modifiable: NON ❌            │
+│  Usage: Code                   │
+└────────────────────────────────┘
+```
+
+### Pourquoi cette Séparation?
+
+| Protection | Objectif |
+|------------|----------|
+| Data = Non-exécutable | Empêche exécution de données → Mitigation buffer overflow |
+| Text = Non-modifiable | Empêche modification du code → Mitigation exploitation |
+
+**Impact Pratique:**
+- ❌ Pas de variables dans `.text`
+- ❌ Pas de code dans `.data`
+- ✅ Sécurité accrue
+- ✅ Exploitation plus difficile
+
+## Template de Base
+
+### Structure Minimale
+```nasm
+; ============================================
+; Programme: [Nom du programme]
+; Description: [Description]
+; ============================================
+
+         global  _start
+
+         section .data
+; --- Variables ---
+message: db      "Hello World!", 0x0a
+msg_len: equ     $-message
+
+         section .text
+_start:
+; --- Code principal ---
+    mov     rax, 1         ; sys_write
+    mov     rdi, 1         ; stdout
+    mov     rsi, message   ; buffer
+    mov     rdx, msg_len   ; longueur
+    syscall
+
+; --- Exit propre ---
+    mov     rax, 60        ; sys_exit
+    mov     rdi, 0         ; code retour 0
+    syscall
+```
+
+---
+
+# Assemblage & Désassemblage
+
+## Processus Complet
+
+```
+Code Assembly (.s) → nasm → Object File (.o) → ld → Exécutable (ELF)
+                   Assemblage            Linkage
+```
+
+## Préparation du Code
+
+### Extensions de Fichiers
+- `.s` ← Utilisé dans ce module
+- `.asm` ← Alternative commune
+
+### Fichier `helloWorld.s`
+```nasm
+global _start
+
+section .data
+    message db "Hello HTB Academy!"
+    length equ $-message
+
+section .text
+_start:
+    mov rax, 1
+    mov rdi, 1
+    mov rsi, message
+    mov rdx, length
+    syscall
+
+    mov rax, 60
+    mov rdi, 0
+    syscall
+```
+
+## Étape 1: Assemblage (nasm)
+
+### Commande de Base
+
+```bash
+nasm -f elf64 helloWorld.s
+```
+
+**Résultat:** `helloWorld.o` (object file)
+
+### Options de Format
+
+| Architecture | Flag | Output |
+|--------------|------|--------|
+| **64-bit** | `-f elf64` | ELF 64-bit |
+| **32-bit** | `-f elf` | ELF 32-bit |
+
+### Qu'est-ce que le Fichier .o?
+
+```
+helloWorld.o = Code machine assemblé + Détails variables/sections
+```
+
+**Caractéristiques:**
+- ✅ Code traduit en machine code
+- ✅ Variables et sections détaillées
+- ❌ **Pas encore exécutable**
+- ⏳ Références et labels non résolus
+
+## Étape 2: Linkage (ld)
+
+### Commande de Base
+
+```bash
+ld -o helloWorld helloWorld.o
+```
+
+**Résultat:** `helloWorld` (exécutable ELF)
+
+### Options par Architecture
+
+| Architecture | Commande |
+|--------------|----------|
+| **64-bit** | `ld -o output file.o` |
+| **32-bit** | `ld -m elf_i386 -o output file.o` |
+
+### Rôle du Linker
+
+**Résout:**
+- ✅ Références → Adresses réelles
+- ✅ Labels → Adresses mémoire
+- ✅ Liens vers bibliothèques OS
+- ✅ Format ELF final
+
+### ELF = Executable and Linkable Format
+
+## Exécution
+
+```bash
+./helloWorld
+```
+
+**Output:**
+```
+Hello HTB Academy!
+```
+
+---
+
+## Script d'Automatisation
+
+### `assembler.sh` - Version Complète
+
+```bash
+#!/bin/bash
+
+fileName="${1%%.*}" # Retire l'extension .s
+
+nasm -f elf64 ${fileName}".s"
+ld ${fileName}".o" -o ${fileName}
+[ "$2" == "-g" ] && gdb -q ${fileName} || ./${fileName}
+```
+
+### Utilisation
+
+```bash
+# Rendre exécutable
+chmod +x assembler.sh
+
+# Assembler, linker et exécuter
+./assembler.sh helloWorld.s
+
+# Assembler, linker et déboguer
+./assembler.sh helloWorld.s -g
+```
+
+**Fonctionnalités:**
+- ✅ Assemble automatiquement
+- ✅ Linke automatiquement
+- ✅ Exécute ou lance GDB selon l'argument
+- ✅ Gère l'extension `.s` automatiquement
+
+## Désassemblage (objdump)
+
+### Commande de Base
+
+```bash
+objdump -M intel -d helloWorld
+```
+
+### Options Principales
+
+| Option | Description |
+|--------|-------------|
+| `-M intel` | Syntaxe Intel (vs AT&T) |
+| `-d` | Désassemble section `.text` |
+| `-D` | Désassemble toutes les sections |
+| `-s` | Dump des strings |
+| `-j .section` | Cibler une section spécifique |
+
+## Exemples de Désassemblage
+
+### 1️⃣ Désassemblage Complet
+
+```bash
+objdump -M intel -d helloWorld
+```
+
+**Output:**
+```nasm
+helloWorld:     file format elf64-x86-64
+
+Disassembly of section .text:
+
+0000000000401000 <_start>:
+  401000:	b8 01 00 00 00       	mov    eax,0x1
+  401005:	bf 01 00 00 00       	mov    edi,0x1
+  40100a:	48 be 00 20 40 00 00 	movabs rsi,0x402000
+  401011:	00 00 00
+  401014:	ba 12 00 00 00       	mov    edx,0x12
+  401019:	0f 05                	syscall
+  40101b:	b8 3c 00 00 00       	mov    eax,0x3c
+  401020:	bf 00 00 00 00       	mov    edi,0x0
+  401025:	0f 05                	syscall
+```
+
+**Colonnes:**
+1. Adresse mémoire
+2. Machine code (hex)
+3. Instruction Assembly
+
+### 2️⃣ Code Propre (Sans Hex/Adresses)
+
+```bash
+objdump -M intel --no-show-raw-insn --no-addresses -d helloWorld
+```
+
+**Output:**
+```nasm
+helloWorld:     file format elf64-x86-64
+
+Disassembly of section .text:
+
+<_start>:
+        mov    eax,0x1
+        mov    edi,0x1
+        movabs rsi,0x402000
+        mov    edx,0x12
+        syscall 
+        mov    eax,0x3c
+        mov    edi,0x0
+        syscall
+```
+
+**Flags:**
+- `--no-show-raw-insn` → Masque machine code
+- `--no-addresses` → Masque adresses mémoire
+
+> ⚠️ **Note:** `movabs` = `mov` (identique, juste une notation objdump)
+
+### 3️⃣ Dump Section .data (Variables)
+
+```bash
+objdump -sj .data helloWorld
+```
+
+**Output:**
+```
+helloWorld:     file format elf64-x86-64
+
+Contents of section .data:
+ 402000 48656c6c 6f204854 42204163 6164656d  Hello HTB Academ
+ 402010 7921                                 y!
+```
+
+**Colonnes:**
+1. Adresse de départ
+2. Bytes en hexadécimal
+3. Représentation ASCII
+
+**Flags:**
+- `-s` → Dump strings/data
+- `-j .data` → Section `.data` uniquement
+- Pas besoin de `-M intel` pour les données
+
+## Observations du Désassemblage
+
+### Optimisations de nasm
+
+#### Résolution des Variables
+```nasm
+# Code Original
+mov rsi, message
+
+# Après Assemblage
+movabs rsi, 0x402000    # message → adresse résolue
+```
+
+#### Résolution des Constantes
+```nasm
+# Code Original
+mov rdx, length         # length equ $-message
+
+# Après Assemblage
+mov edx, 0x12          # length → valeur calculée (18 = 0x12)
+```
+
+#### Optimisation des Registres
+```nasm
+# Code Original
+mov rax, 1
+
+# Après Assemblage (optimisé)
+mov eax, 0x1           # 32-bit au lieu de 64-bit (économie mémoire)
+```
+
+**Raison:** nasm utilise sub-registres quand possible pour économiser de la mémoire
+
+## Tips & Tricks
+
+### Astuces nasm
+- ✅ Utiliser `equ $-label` pour longueurs dynamiques
+- ✅ nasm optimise automatiquement les registres
+- ✅ Labels et variables résolus après linkage
+
+### Astuces objdump
+- ✅ Toujours utiliser `-M intel` pour syntaxe Intel
+- ✅ `-d` pour code, `-s` pour données
+- ✅ `movabs` dans output = `mov` (identique)
+
+### Debugging
+- ✅ Désassembler pour vérifier le code généré
+- ✅ Vérifier section `.data` pour les variables
+- ✅ Comparer code original vs assemblé
+
+## Points d'Attention
+
+### Fichier .o
+- ❌ **Non exécutable** directement
+- ✅ Nécessite linkage avec `ld`
+- ✅ Contient références non résolues
+
+### Linkage Obligatoire
+- Labels → Adresses réelles
+- Bibliothèques OS → Liées
+- Format → ELF exécutable
+
+### Architecture
+- 🔴 **64-bit:** `-f elf64` (nasm) + défaut (ld)
+- 🔵 **32-bit:** `-f elf` (nasm) + `-m elf_i386` (ld)
+
+---
+
+# GNU Debugger (GDB)
+
+## Qu'est-ce que le Debugging?
+
+### Définition
+- **Debugging** = Trouver et corriger les bugs (erreurs)
+- Processus: Breakpoints → Examiner → Identifier le problème
+
+### Pourquoi en Assembly?
+- Code = instructions machine en mémoire
+- Breakpoints = adresses mémoire (pas lignes de code)
+- Observer comment les registres/mémoire changent
+
+## Installation
+
+### GDB
+
+```bash
+sudo apt-get update
+sudo apt-get install gdb
+```
+
+**Distributions:** Pré-installé sur Parrot OS, PwnBox, et la plupart des distros Linux
+
+## Plugin GEF (Recommandé)
+
+### Qu'est-ce que GEF?
+
+**GEF** = GDB Enhanced Features
+- Plugin gratuit et open-source
+- Conçu pour **reverse engineering** et **exploitation binaire**
+- Excellente documentation
+- Interface améliorée et colorée
+
+### Installation
+
+```bash
+# Télécharger GEF
+wget -O ~/.gdbinit-gef.py -q https://gef.blah.cat/py
+
+# Activer GEF au démarrage de GDB
+echo source ~/.gdbinit-gef.py >> ~/.gdbinit
+```
+
+**Documentation:** https://gef.readthedocs.io
+
+## Lancer GDB
+
+### Méthode 1: Directe
+
+```bash
+gdb -q ./helloWorld
+```
+
+**Output:**
+```
+...SNIP...
+gef➤
+```
+
+**Flags:**
+- `-q` = Quiet (sans bannière)
+
+### Méthode 2: Avec Script Assembler
+
+```bash
+./assembler.sh helloWorld.s -g
+```
+
+**Résultat:**
+- ✅ Assemble le code
+- ✅ Linke le code
+- ✅ Lance GDB automatiquement
+
+## Commande `info`
+
+### Vue d'Ensemble
+
+```bash
+gef➤ info [target]
+```
+
+**Usage:** Affiche informations générales sur le programme
+
+### Aide Intégrée
+
+```bash
+gef➤ help info
+gef➤ help [commande]
+```
+
+## Info Functions
+
+### Commande
+
+```bash
+gef➤ info functions
+```
+
+### Exemple Output
+
+```
+All defined functions:
+
+Non-debugging symbols:
+0x0000000000401000  _start
+```
+
+**Informations:**
+- Adresse mémoire de chaque fonction
+- Nom de la fonction
+- `_start` = point d'entrée principal
+
+## Info Variables
+
+### Commande
+
+```bash
+gef➤ info variables
+```
+
+### Exemple Output
+
+```
+All defined variables:
+
+Non-debugging symbols:
+0x0000000000402000  message
+0x0000000000402012  __bss_start
+0x0000000000402012  _edata
+0x0000000000402018  _end
+```
+
+**Informations:**
+- `message` = Notre variable personnalisée
+- `__bss_start`, `_edata`, `_end` = Variables système (segments mémoire)
+
+## Désassemblage avec `disassemble`
+
+### Commandes
+
+```bash
+gef➤ disassemble fonction
+gef➤ disas fonction          # Alias court
+```
+
+### Exemple: Désassembler `_start`
+
+```bash
+gef➤ disas _start
+```
+
+**Output:**
+```nasm
+Dump of assembler code for function _start:
+   0x0000000000401000 <+0>:     mov    eax,0x1
+   0x0000000000401005 <+5>:     mov    edi,0x1
+   0x000000000040100a <+10>:    movabs rsi,0x402000
+   0x0000000000401014 <+20>:    mov    edx,0x12
+   0x0000000000401019 <+25>:    syscall
+   0x000000000040101b <+27>:    mov    eax,0x3c
+   0x0000000000401020 <+32>:    mov    edi,0x0
+   0x0000000000401025 <+37>:    syscall
+End of assembler dump.
+```
+
+### Colonnes du Output
+
+| Colonne | Description | Exemple |
+|---------|-------------|---------|
+| **1** | Adresse mémoire absolue | `0x0000000000401000` |
+| **2** | Offset depuis le début de la fonction | `<+0>`, `<+5>`, `<+10>` |
+| **3** | Instruction Assembly | `mov eax,0x1` |
+
+## Importance des Adresses Mémoire
+
+### Pourquoi C'est Critique?
+
+```
+Adresses mémoire = Points de référence pour:
+├─ Examiner variables/opérandes
+├─ Placer des breakpoints
+└─ Suivre le flux d'exécution
+```
+
+### Exemple d'Usage
+
+```bash
+# Voir la valeur à une adresse
+gef➤ x/s 0x402000           # Examine string à cette adresse
+
+# Placer un breakpoint
+gef➤ break *0x0000000000401019   # Break avant syscall
+```
+
+## PIE - Position Independent Executable
+
+### Qu'est-ce que PIE?
+
+**PIE** = Exécutable à Position Indépendante
+
+### Adressage $rip-Relatif
+
+```
+Adresse affichée:  0x00000000004xxxxx
+Adresse réelle:    0xffffffffaa8a25ff
+
+└─ Adresse relative à $rip (Instruction Pointer)
+   plutôt qu'adresse absolue en RAM
+```
+
+### Pourquoi?
+
+**Avantages:**
+- ✅ Sécurité accrue
+- ✅ ASLR (Address Space Layout Randomization)
+- ✅ Exploitation plus difficile
+
+**Caractéristiques:**
+- Adresses dans la Virtual RAM du programme
+- Distance relative à `$rip` (Instruction Pointer)
+- Peut être désactivé pour réduire risque d'exploitation
+
+### Impact Pratique
+
+```
+Sans PIE:  Adresses fixes et prévisibles
+Avec PIE:  Adresses changent à chaque exécution
+```
+
+## Comparaison Outputs
+
+### disas (GDB) vs objdump
+
+**Similitudes:**
+```
+Même code Assembly
+Même adresses relatives
+Même instructions
+```
+
+**Différences:**
+
+| Outil | Format | Usage |
+|-------|--------|-------|
+| **objdump** | Statique (fichier) | Analyse avant exécution |
+| **GDB disas** | Dynamique (mémoire) | Analyse pendant exécution |
+
+## Workflow de Debugging
+
+### Étapes Typiques
+
+```
+1. Lancer GDB
+   └─ gdb -q ./binary
+
+2. Examiner structure
+   ├─ info functions
+   └─ info variables
+
+3. Désassembler code
+   └─ disas _start
+
+4. Identifier points clés
+   └─ Noter adresses importantes
+
+5. Placer breakpoints
+   └─ break *0x401019
+
+6. Exécuter et examiner
+   └─ run, step, examine
+```
+
+## Commandes Quick Reference
+
+### Démarrage
+
+```bash
+gdb -q ./binary              # Lancer GDB (quiet mode)
+./assembler.sh file.s -g     # Assembler + GDB
+```
+
+### Information
+
+```bash
+info functions               # Liste des fonctions
+info variables               # Liste des variables
+help [commande]              # Aide sur commande
+```
+
+### Désassemblage
+
+```bash
+disassemble fonction         # Désassembler fonction
+disas fonction               # Alias court
+disas _start                 # Désassembler point d'entrée
+```
+
+## Tips & Tricks
+
+### GEF
+- ✅ Interface colorée et claire
+- ✅ Informations automatiques sur registres
+- ✅ Contexte visuel amélioré
+- ✅ Commandes supplémentaires pour exploitation
+
+### GDB Natif vs GEF
+
+| Fonctionnalité | GDB | GEF |
+|----------------|-----|-----|
+| Commandes de base | ✅ | ✅ |
+| Interface colorée | ❌ | ✅ |
+| Context auto | ❌ | ✅ |
+| Exploitation helpers | ❌ | ✅ |
+
+### Debugging Assembly
+- 🎯 Toujours noter adresses importantes
+- 🎯 Comparer avec objdump pour validation
+- 🎯 PIE = adresses relatives, pas absolues
+- 🎯 Utiliser GEF pour meilleure visibilité
+
+## ⚠️ Points d'Attention
+
+### Adresses Mémoire
+```
+⚠️ PIE activé = adresses relatifs
+⚠️ Adresses changent entre exécutions
+⚠️ Utiliser offsets (<+0>, <+5>) pour référence
+```
+
+### Variables Système
+```
+__bss_start, _edata, _end = Variables par défaut
+→ Ne pas confondre avec vos variables
+```
+
+### Formats d'Adresse
+```
+0x00000000004xxxxx  → Format PIE (relatif)
+0xffffffffaa8a25ff → Format absolu (mémoire réelle)
+```
+
+---
+
+
+
+
+
+
+
+
+
+
+
+
