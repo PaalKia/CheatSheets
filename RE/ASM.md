@@ -1926,7 +1926,540 @@ __bss_start, _edata, _end = Variables par défaut
 
 ---
 
+# Debugging avec GDB 
 
+## Les 4 Étapes du Debugging
+
+```
+┌──────────────────────────────────────────┐
+│  1. BREAK   → Placer breakpoints         │
+│  2. EXAMINE → Examiner état du programme │
+│  3. STEP    → Avancer instruction par    │
+│              instruction                  │
+│  4. MODIFY  → Modifier valeurs/registres │
+└──────────────────────────────────────────┘
+```
+
+| Étape | Objectif | Commandes |
+|-------|----------|-----------|
+| **Break** | Arrêter l'exécution à des points clés | `break`, `b` |
+| **Examine** | Inspecter registres/mémoire | `x`, `info`, `registers` |
+| **Step** | Progresser dans le code | `si`, `s`, `ni`, `n` |
+| **Modify** | Changer valeurs pour tester | `set`, `patch` |
+
+---
+
+## 1️⃣ BREAK - Placer des Breakpoints
+
+### Commandes de Base
+
+```bash
+break location     # Placer breakpoint
+b location         # Alias court
+```
+
+### Types de Breakpoints
+
+#### Par Fonction
+```bash
+gef➤ b _start
+Breakpoint 1 at 0x401000
+```
+
+#### Par Adresse Absolue
+```bash
+gef➤ b *0x40100a
+Breakpoint 1 at 0x40100a
+```
+
+#### Par Offset
+```bash
+gef➤ b *_start+10
+Breakpoint 1 at 0x40100a
+```
+
+> ⚠️ **Important:** L'astérisque `*` indique à GDB de break à l'instruction **stockée** à cette adresse
+
+### Lancer le Programme
+
+```bash
+gef➤ run           # Lancer depuis le début
+gef➤ r             # Alias court
+```
+
+**Output Exemple:**
+```
+Starting program: ./helloWorld 
+
+Breakpoint 1, 0x0000000000401000 in _start ()
+[ Legend: Modified register | Code | Heap | Stack | String ]
+───────────────────────────────────────── registers ────
+$rax   : 0x0               
+$rbx   : 0x0               
+$rip   : 0x0000000000401000  →  <_start+0> mov eax, 0x1
+...SNIP...
+───────────────────────────────────────── code:x86:64 ────
+ →   0x401000 <_start+0>       mov    eax, 0x1
+     0x401005 <_start+5>       mov    edi, 0x1
+     0x40100a <_start+10>      movabs rsi, 0x402000
+```
+
+---
+
+### Continuer l'Exécution
+
+```bash
+gef➤ continue      # Continuer jusqu'au prochain breakpoint
+gef➤ c             # Alias court
+```
+
+**Différence run vs continue:**
+
+| Commande | Comportement |
+|----------|-------------|
+| `run` / `r` | Redémarre programme **depuis le début** |
+| `continue` / `c` | Continue depuis **position actuelle** |
+
+---
+
+### Gérer les Breakpoints
+
+#### Lister les Breakpoints
+```bash
+gef➤ info breakpoint
+gef➤ info b
+```
+
+**Output:**
+```
+Num     Type           Disp Enb Address            What
+1       breakpoint     keep y   0x0000000000401000 <_start>
+2       breakpoint     keep y   0x000000000040100a <_start+10>
+```
+
+#### Désactiver/Activer
+```bash
+gef➤ disable 1     # Désactiver breakpoint #1
+gef➤ enable 1      # Réactiver breakpoint #1
+```
+
+#### Supprimer
+```bash
+gef➤ delete 1      # Supprimer breakpoint #1
+gef➤ delete        # Supprimer TOUS les breakpoints
+```
+
+---
+
+### Breakpoints Conditionnels
+
+```bash
+gef➤ break *0x401000 if $rax == 0x5
+```
+
+**Utilisation:** Arrêter uniquement quand une condition est vraie
+
+---
+
+## 2️⃣ EXAMINE - Examiner Données
+
+### Commande `x` (Examine)
+
+#### Syntaxe
+```bash
+x/FMT ADDRESS
+```
+
+#### Format FMT
+
+| Partie | Description | Valeurs Possibles |
+|--------|-------------|-------------------|
+| **Count** | Nombre de répétitions | `1`, `2`, `4`, `10`, etc. |
+| **Format** | Format d'affichage | `x`(hex), `s`(string), `i`(instruction), `d`(decimal) |
+| **Size** | Taille mémoire | `b`(byte), `h`(halfword), `w`(word), `g`(giant/8 bytes) |
+
+
+### Examiner Instructions
+
+#### Commande
+```bash
+gef➤ x/4ig $rip
+```
+
+**Décomposition:**
+- `4` = 4 répétitions
+- `i` = format instruction
+- `g` = taille giant (8 bytes)
+- `$rip` = adresse (registre instruction pointer)
+
+**Output:**
+```nasm
+=> 0x401000 <_start>:      mov    eax,0x1
+   0x401005 <_start+5>:    mov    edi,0x1
+   0x40100a <_start+10>:   movabs rsi,0x402000
+   0x401014 <_start+20>:   mov    edx,0x12
+```
+
+### Examiner Strings
+
+#### Commande
+```bash
+gef➤ x/s 0x402000
+```
+
+**Décomposition:**
+- Pas de count (défaut = 1)
+- `s` = format string
+- `0x402000` = adresse de la variable
+
+**Output:**
+```
+0x402000:	"Hello HTB Academy!"
+```
+
+### Examiner en Hexadécimal
+
+#### Commande
+```bash
+gef➤ x/wx 0x401000
+```
+
+**Décomposition:**
+- `w` = word (4 bytes)
+- `x` = format hexadécimal
+
+**Output:**
+```
+0x401000 <_start>:	0x000001b8
+```
+
+**Interprétation:**
+```
+Hex:           0x000001b8
+Little-Endian: b8 01 00 00
+Assembly:      mov eax, 0x1
+```
+
+### Examiner Multiple Addresses
+
+#### Hex Dump 4 Words
+```bash
+gef➤ x/4wx 0x402000
+```
+
+**Output:**
+```
+0x402000:  0x6c6c6548  0x4854206f  0x63412042  0x6d656461
+```
+
+**Interprétation:**
+```
+0x6c6c6548 = "Hell" (little-endian)
+0x4854206f = "o HT"
+0x63412042 = "B Ac"
+0x6d656461 = "adem"
+```
+
+### Formats Courants
+
+| Format | Description | Exemple Usage |
+|--------|-------------|---------------|
+| `x/s` | String | Variables texte |
+| `x/i` | Instruction | Code désassemblé |
+| `x/x` | Hexadécimal | Données brutes, addresses |
+| `x/d` | Décimal | Nombres entiers |
+| `x/c` | Caractère | Caractères ASCII |
+
+### Commande GEF `registers`
+
+```bash
+gef➤ registers
+```
+
+**Output:**
+```
+$rax   : 0x0               
+$rbx   : 0x0               
+$rcx   : 0x0               
+$rdx   : 0x0               
+$rsp   : 0x00007fffffffe310  →  0x0000000000000001
+$rbp   : 0x0               
+$rsi   : 0x0               
+$rdi   : 0x0               
+$rip   : 0x0000000000401000  →  <_start+0> mov eax, 0x1
+```
+
+**Avantage GEF:** Affichage automatique des registres à chaque breakpoint
+
+## 3️⃣ STEP - Avancer dans le Programme
+
+### Position Actuelle
+
+```
+─────────────────────────────────────── code:x86:64 ────
+     0x400ffe                  add    BYTE PTR [rax], al
+ →   0x401000 <_start+0>       mov    eax, 0x1
+     0x401005 <_start+5>       mov    edi, 0x1
+```
+
+> ⚠️ **Symbole →** = Position actuelle (instruction **non encore exécutée**)
+
+### `stepi` / `si` - Step Instruction
+
+#### Commande
+```bash
+gef➤ si            # Step 1 instruction
+gef➤ si 3          # Step 3 instructions
+```
+
+**Comportement:** Avance **une instruction Assembly** à la fois
+
+**Exemple:**
+```bash
+gef➤ si
+0x0000000000401005 in _start ()
+   0x400fff                  add    BYTE PTR [rax+0x1], bh
+ →   0x401005 <_start+5>       mov    edi, 0x1
+     0x40100a <_start+10>      movabs rsi, 0x402000
+```
+
+### `step` / `s` - Step (High-Level)
+
+#### Commande
+```bash
+gef➤ s             # Step jusqu'à prochaine ligne/fonction
+```
+
+**Comportement:**
+- Continue jusqu'à **sortie de la fonction actuelle**
+- OU jusqu'à **entrée dans une nouvelle fonction**
+- En Assembly: souvent sort complètement de `_start`
+
+**Exemple:**
+```bash
+gef➤ step
+
+Single stepping until exit from function _start,
+which has no line number information.
+Hello HTB Academy!
+[Inferior 1 (process 14732) exited normally]
+```
+
+### Comparaison des Commandes Step
+
+| Commande | Niveau | Entre dans fonctions? | Usage |
+|----------|--------|----------------------|-------|
+| **si** (stepi) | Instruction Assembly | Oui | Debugging bas niveau |
+| **s** (step) | Ligne de code | Oui | Debugging haut niveau |
+| **ni** (nexti) | Instruction Assembly | Non (skip) | Éviter fonctions |
+| **n** (next) | Ligne de code | Non (skip) | Éviter fonctions |
+
+### Astuce: Repeat Last Command
+
+```bash
+gef➤ si
+[... output ...]
+gef➤ [ENTER]      # Répète 'si'
+[... output ...]
+gef➤ [ENTER]      # Répète encore 'si'
+```
+
+**Pratique pour:** Avancer rapidement sans retaper la commande
+
+## 4️⃣ MODIFY - Modifier Valeurs
+
+### Pourquoi Modifier?
+
+```
+Tester différentes conditions SANS:
+├─ Recompiler le code
+├─ Modifier le source
+└─ Redémarrer le programme
+```
+
+**Applications:**
+- 🧪 Tester exploits
+- 🐛 Déboguer problèmes
+- 🔬 Comprendre comportements
+
+### Commande GEF `patch`
+
+#### Aide
+```bash
+gef➤ help patch
+```
+
+**Syntaxe:**
+```bash
+patch (qword|dword|word|byte) LOCATION VALUE
+patch string LOCATION "string"
+```
+
+### Modifier une String
+
+#### Exemple Complet
+
+```bash
+# 1. Placer breakpoint avant syscall
+gef➤ break *0x401019
+Breakpoint 1 at 0x401019
+
+# 2. Lancer programme
+gef➤ r
+
+# 3. Patcher la string
+gef➤ patch string 0x402000 "Patched!\\x0a"
+
+# 4. Continuer
+gef➤ c
+
+Continuing.
+Patched!
+ Academy!
+```
+
+**Résultat:** String partiellement modifiée
+
+**Pourquoi "Academy!" reste?**
+- Notre string = 9 bytes (`Patched!\n`)
+- Ancienne string = 18 bytes
+- On n'a modifié que les 9 premiers bytes!
+
+### Modifier un Registre
+
+#### Commande `set`
+
+```bash
+gef➤ set $rdx=0x9
+```
+
+**Utilisation:** Ajuster la longueur pour syscall write
+
+#### Exemple Complet
+
+```bash
+# 1. Breakpoint
+gef➤ break *0x401019
+Breakpoint 1 at 0x401019
+
+# 2. Run
+gef➤ r
+
+# 3. Patcher string
+gef➤ patch string 0x402000 "Patched!\\x0a"
+
+# 4. Ajuster longueur dans $rdx
+gef➤ set $rdx=0x9
+
+# 5. Continuer
+gef➤ c
+
+Continuing.
+Patched!
+```
+
+**Résultat:** String complètement modifiée, longueur correcte! 
+
+### Types de Patch
+
+#### Patch Byte
+```bash
+gef➤ patch byte 0x402000 0x41    # 'A'
+```
+
+#### Patch Word (2 bytes)
+```bash
+gef➤ patch word 0x402000 0x4241  # 'AB'
+```
+
+#### Patch Double Word (4 bytes)
+```bash
+gef➤ patch dword 0x402000 0x44434241  # 'ABCD'
+```
+
+#### Patch Quad Word (8 bytes)
+```bash
+gef➤ patch qword 0x402000 0x4847464544434241  # 'ABCDEFGH'
+```
+
+### Modifier Flags
+
+```bash
+gef➤ set $eflags = 0x246
+```
+
+**Usage:** Forcer conditions (zero flag, carry flag, etc.)
+
+## Tips & Astuces
+
+### GEF Auto-Display
+
+**À chaque breakpoint, GEF affiche automatiquement:**
+- ✅ Registres
+- ✅ Stack
+- ✅ Code (prochaines instructions)
+- ✅ Threads
+- ✅ Trace
+
+**Gain de temps énorme!**
+
+### Raccourcis Clavier
+
+```bash
+[ENTER]            # Répète dernière commande
+Ctrl+C             # Interrompt exécution
+Ctrl+D             # Quitte GDB
+```
+
+### Examination Par Défaut
+
+```bash
+gef➤ x/4ig $rip    # Examine en instruction giant
+gef➤ x $rip        # Utilise derniers format/size (ig)
+```
+
+**Astuce:** Pas besoin de respécifier format si identique au précédent
+
+### Little-Endian Reminder
+
+```bash
+gef➤ x/wx 0x401000
+0x401000: 0x000001b8
+```
+
+**Lecture:**
+```
+Affiché:  0x000001b8
+Stocké:   b8 01 00 00  (inversé!)
+```
+
+## ⚠️ Points d'Attention
+
+### run vs continue
+
+```
+❌ Utiliser 'r' avec breakpoint actif
+   → Redémarre depuis début
+   
+✅ Utiliser 'c' avec breakpoint actif
+   → Continue depuis position actuelle
+```
+
+### Taille des Patches
+
+```
+⚠️ Patcher string plus courte que l'originale
+   → Laisse des restes de l'ancienne string
+   
+✅ Ajuster aussi la longueur utilisée (ex: $rdx pour write)
+```
+
+### Instruction Pointer
+
+```
+→ Symbole indique instruction NON ENCORE EXÉCUTÉE
+   Sera exécutée au prochain 'si' ou 'c'
+```
 
 
 
