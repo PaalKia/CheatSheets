@@ -2461,7 +2461,543 @@ Stocké:   b8 01 00 00  (inversé!)
    Sera exécutée au prochain 'si' ou 'c'
 ```
 
+---
 
+# Instructions de Déplacement de Données
+
+## Instructions Principales
+
+### Vue d'Ensemble
+
+| Instruction | Description | Exemple | Résultat |
+|-------------|-------------|---------|----------|
+| **mov** | Copier données ou charger valeur immédiate | `mov rax, 1` | `rax = 1` |
+| **lea** | Charger adresse pointant vers valeur | `lea rax, [rsp+5]` | `rax = adresse de (rsp+5)` |
+| **xchg** | Échanger données entre deux registres | `xchg rax, rbx` | `rax ↔ rbx` |
+
+## Instruction `mov`
+
+### Principe Fondamental
+
+> ⚠️ **mov = COPIE, pas déplacement!**
+> 
+> La source reste **inchangée** après l'opération
+
+```nasm
+mov rax, rbx    ; rax = rbx (rbx reste identique)
+```
+
+### Charger Valeurs Immédiates
+
+#### Syntaxe
+```nasm
+mov destination, valeur_immédiate
+```
+
+#### Exemple: Initialisation Fibonacci
+```nasm
+global  _start
+
+section .text
+_start:
+    mov rax, 0    ; F0 = 0
+    mov rbx, 1    ; F1 = 1
+```
+
+**Résultat:**
+```
+$rax : 0x0
+$rbx : 0x1
+```
+
+### Optimisation: Taille des Registres
+
+#### Problème d'Efficacité
+
+```nasm
+mov rax, 1      ; Inefficace: charge 0x0000000000000001 (8 bytes)
+mov al, 1       ; Efficace: charge 0x01 (1 byte)
+```
+
+#### Comparaison Shellcode
+
+**Code:**
+```nasm
+global  _start
+
+section .text
+_start:
+    mov rax, 0    ; Version inefficace
+    mov rbx, 1    ; Version inefficace
+    mov bl, 1     ; Version efficace
+```
+
+**Désassemblage:**
+```
+0:  b8 00 00 00 00       mov    eax,0x0      ; 5 bytes
+5:  bb 01 00 00 00       mov    ebx,0x1      ; 5 bytes
+a:  b3 01                mov    bl,0x1       ; 2 bytes ✅
+```
+
+**Observation:**
+- `mov rbx, 1` → 5 bytes
+- `mov bl, 1` → 2 bytes
+- **Plus de 2x plus efficace!**
+
+### Version Optimisée
+
+```nasm
+global  _start
+
+section .text
+_start:
+    mov al, 0     ; F0 = 0 (1 byte)
+    mov bl, 1     ; F1 = 1 (1 byte)
+```
+
+**Avantages:**
+- ✅ Shellcode plus court
+- ✅ Plus rapide à exécuter
+- ✅ Moins de mémoire utilisée
+
+**Règle d'Or:**
+> Toujours utiliser la **plus petite taille de registre** nécessaire!
+
+## Instruction `xchg`
+
+### Syntaxe
+```nasm
+xchg operand1, operand2
+```
+
+### Fonctionnement
+
+```nasm
+; Avant
+rax = 5
+rbx = 10
+
+xchg rax, rbx
+
+; Après
+rax = 10
+rbx = 5
+```
+
+### Exemple Pratique
+
+```nasm
+global  _start
+
+section .text
+_start:
+    mov al, 0     ; rax = 0
+    mov bl, 1     ; rbx = 1
+    xchg rax, rbx ; Échanger
+```
+
+**Avant xchg:**
+```
+$rax : 0x0
+$rbx : 0x1
+```
+
+**Après xchg:**
+```
+$rax : 0x1
+$rbx : 0x0
+```
+
+## Pointeurs d'Adresses
+
+### Concept des Pointeurs
+
+```
+Registre Pointeur → Contient une ADRESSE → Qui pointe vers VALEUR
+```
+
+**Exemple:**
+```
+$rsp : 0x00007fffffffe490  →  0x0000000000000001
+       └─ Adresse immédiate     └─ Valeur finale
+```
+
+### Registres Pointeurs Principaux
+
+| Registre | Nom | Pointe vers |
+|----------|-----|-------------|
+| **rsp** | Stack Pointer | Sommet de la stack |
+| **rbp** | Base Pointer | Base de la stack |
+| **rip** | Instruction Pointer | Prochaine instruction |
+
+## Déplacement de Pointeurs
+
+### Sans Crochets: Copie l'Adresse
+
+```nasm
+mov rax, rsp
+```
+
+**Effet:**
+```
+rsp = 0x00007fffffffe490  →  0x1
+
+Après mov rax, rsp:
+rax = 0x00007fffffffe490  (copie l'ADRESSE)
+```
+
+### Avec Crochets `[]`: Déréférence le Pointeur
+
+```nasm
+mov rax, [rsp]
+```
+
+**Signification:** `[]` = **"valeur à l'adresse"**
+
+**Effet:**
+```
+rsp = 0x00007fffffffe490  →  0x1
+
+Après mov rax, [rsp]:
+rax = 0x1  (copie la VALEUR pointée)
+```
+
+### Exemple Complet: Avec vs Sans Crochets
+
+#### Code
+```nasm
+global  _start
+
+section .text
+_start:
+    mov rax, rsp      ; Copie l'adresse
+    mov rax, [rsp]    ; Copie la valeur
+```
+
+#### Debug Étape 1: `mov rax, rsp`
+
+```bash
+gef➤ b _start
+gef➤ r
+gef➤ si
+```
+
+**Résultat:**
+```
+─────────────────────────────── code:x86:64 ────
+ →   0x401000 <_start+0>       mov    rax, rsp
+───────────────────────────────── registers ────
+$rax   : 0x00007fffffffe490  →  0x0000000000000001
+$rsp   : 0x00007fffffffe490  →  0x0000000000000001
+```
+
+**rax = adresse (0x00007fffffffe490)**
+
+#### Debug Étape 2: `mov rax, [rsp]`
+
+```bash
+gef➤ si
+```
+
+**Résultat:**
+```
+─────────────────────────────── code:x86:64 ────
+ →   0x401003 <_start+3>       mov    rax, QWORD PTR [rsp]
+───────────────────────────────── registers ────
+$rax   : 0x1               
+$rsp   : 0x00007fffffffe490  →  0x0000000000000001
+```
+
+**rax = valeur (0x1)**
+
+### Offsets avec Pointeurs
+
+#### Syntaxe
+```nasm
+mov rax, [rsp+10]    ; Valeur à rsp+10
+lea rax, [rsp+10]    ; Adresse de rsp+10
+```
+
+#### Calcul d'Offset
+
+```
+rsp = 0x7fffffffe490
+
+[rsp+10] = valeur à l'adresse (0x7fffffffe490 + 0x10)
+         = valeur à 0x7fffffffe4a0
+```
+
+## Instruction `lea` (Load Effective Address)
+
+### Définition
+
+**lea** = Charger l'**adresse** d'une valeur (pas la valeur elle-même)
+
+### Différence mov vs lea
+
+| Instruction | Que fait-elle? | Exemple | Résultat |
+|-------------|----------------|---------|----------|
+| **mov rax, rsp** | Copie adresse | `rsp = 0x490` | `rax = 0x490` |
+| **lea rax, [rsp]** | Charge adresse | `rsp = 0x490` | `rax = 0x490` |
+| **mov rax, [rsp]** | Copie valeur | `[rsp] = 0x1` | `rax = 0x1` |
+
+**Pour adresses directes:** `mov` et `lea` sont identiques
+
+### Utilité: Offsets
+
+#### mov avec offset → Copie VALEUR
+```nasm
+mov rax, [rsp+10]    ; rax = valeur à (rsp+10)
+```
+
+#### lea avec offset → Charge ADRESSE
+```nasm
+lea rax, [rsp+10]    ; rax = adresse de (rsp+10)
+```
+
+> ⚠️ **Important:** `mov` ne peut PAS charger une adresse avec offset!
+
+### Exemple Complet: lea vs mov
+
+#### Code
+```nasm
+global  _start
+
+section .text
+_start:
+    lea rax, [rsp+10]    ; Charge adresse
+    mov rax, [rsp+10]    ; Charge valeur
+```
+
+#### Debug Étape 1: `lea rax, [rsp+10]`
+
+```bash
+gef➤ b _start
+gef➤ r
+gef➤ si
+```
+
+**Résultat:**
+```
+─────────────────────────────── code:x86:64 ────
+ →   0x401003 <_start+0>       lea    rax, [rsp+0xa]
+───────────────────────────────── registers ────
+$rax   : 0x00007fffffffe49a  →  0x000000007fffffff
+$rsp   : 0x00007fffffffe490  →  0x0000000000000001
+```
+
+**Calcul:**
+```
+rsp = 0x7fffffffe490
+rax = 0x7fffffffe49a  (= rsp + 0xa = rsp + 10) ✅
+```
+
+#### Debug Étape 2: `mov rax, [rsp+10]`
+
+```bash
+gef➤ si
+```
+
+**Résultat:**
+```
+─────────────────────────────── code:x86:64 ────
+ →   0x401008 <_start+8>       mov    rax, QWORD PTR [rsp+0xa]
+───────────────────────────────── registers ────
+$rax   : 0x7fffffff        
+$rsp   : 0x00007fffffffe490  →  0x0000000000000001
+```
+
+**mov charge la valeur stockée à [rsp+10]** ✅
+
+## Tableau Récapitulatif
+
+### mov vs lea - Tous les Cas
+
+| Code | Opération | Résultat | Usage |
+|------|-----------|----------|-------|
+| `mov rax, 5` | Charge valeur immédiate | `rax = 5` | Constantes |
+| `mov rax, rbx` | Copie registre | `rax = rbx` | Transfert données |
+| `mov rax, rsp` | Copie adresse | `rax = adresse_de_rsp` | Copie pointeur |
+| `mov rax, [rsp]` | Déréférence pointeur | `rax = valeur_à_rsp` | Accès mémoire |
+| `mov rax, [rsp+10]` | Déréférence avec offset | `rax = valeur_à_(rsp+10)` | Accès avec décalage |
+| `lea rax, [rsp]` | Charge adresse | `rax = adresse_de_rsp` | Même que mov rsp |
+| `lea rax, [rsp+10]` | Charge adresse+offset | `rax = adresse_de_(rsp+10)` | **Calcul d'adresse** |
+
+## Cas d'Usage Pratiques
+
+### 1. Variables Simples
+```nasm
+mov rax, 42         ; Charger constante
+mov rbx, rax        ; Copier entre registres
+```
+
+### 2. Accès Tableau
+```nasm
+lea rsi, [array]    ; rsi = pointeur vers array
+mov rax, [rsi]      ; rax = premier élément
+mov rbx, [rsi+8]    ; rbx = deuxième élément (8 bytes plus loin)
+```
+
+### 3. Stack Frame
+```nasm
+lea rbp, [rsp]      ; Sauvegarder stack pointer
+mov rax, [rbp-8]    ; Accès variable locale
+```
+
+### 4. Syscall avec String
+```nasm
+section .data
+    msg db "Hello", 0xa
+
+section .text
+    lea rsi, [msg]   ; rsi = pointeur vers "Hello"
+    mov rdx, 6       ; longueur
+    ; ... syscall write
+```
+
+## Notes Spéciales: QWORD PTR
+
+### Apparition dans GDB
+
+```nasm
+mov rax, [rsp]
+```
+
+**Désassemblé devient:**
+```nasm
+mov rax, QWORD PTR [rsp]
+```
+
+**Signification:**
+- `QWORD` = Quad Word = 8 bytes = 64 bits
+- `PTR` = Pointer (pointeur)
+- **nasm ajoute automatiquement** la spécification de taille
+
+### Tailles Possibles
+
+| Préfixe | Taille | Exemple |
+|---------|--------|---------|
+| `BYTE PTR` | 1 byte | `mov al, BYTE PTR [rsp]` |
+| `WORD PTR` | 2 bytes | `mov ax, WORD PTR [rsp]` |
+| `DWORD PTR` | 4 bytes | `mov eax, DWORD PTR [rsp]` |
+| `QWORD PTR` | 8 bytes | `mov rax, QWORD PTR [rsp]` |
+
+## Règles d'Or
+
+### Efficacité du Code
+
+```
+✅ Utiliser le plus petit registre nécessaire
+   mov al, 1    (2 bytes shellcode)
+   
+❌ Éviter les registres trop grands
+   mov rax, 1   (5+ bytes shellcode)
+```
+
+### Pointeurs
+
+```
+Sans crochets [] = Adresse
+Avec crochets [] = Valeur à l'adresse
+```
+
+### mov vs lea
+
+```
+mov = Copie données (valeurs ou adresses simples)
+lea = Calcule et charge adresses (avec offsets)
+```
+
+## Exercices Pratiques
+
+### Exercice 1: Prédire les Valeurs
+
+```nasm
+mov rax, 10
+mov rbx, rax
+xchg rax, rbx
+mov rcx, [rsp]
+lea rdx, [rsp+8]
+```
+
+**Questions:**
+1. Quelle est la valeur de rbx après ligne 2?
+2. Que contient rax après ligne 3?
+3. rcx contient une adresse ou une valeur?
+4. rdx contient quoi?
+
+**Réponses:**
+1. `rbx = 10`
+2. `rax = 10` (inchangé par xchg car rax = rbx)
+3. Valeur (à cause de `[]`)
+4. Adresse de (rsp+8)
+
+### Exercice 2: Corriger le Code
+
+**Code Inefficace:**
+```nasm
+mov rax, 0
+mov rbx, 1
+mov rcx, 2
+```
+
+**Version Optimisée:**
+```nasm
+mov al, 0
+mov bl, 1
+mov cl, 2
+```
+
+## Quick Reference
+
+### Instructions Essentielles
+
+```nasm
+; Valeurs immédiates
+mov rax, 42
+
+; Entre registres
+mov rax, rbx
+
+; Copier adresse
+mov rax, rsp
+
+; Déréférencer
+mov rax, [rsp]
+
+; Avec offset (valeur)
+mov rax, [rsp+10]
+
+; Avec offset (adresse)
+lea rax, [rsp+10]
+
+; Échanger
+xchg rax, rbx
+```
+
+## Application: Début Fibonacci
+
+### Code Initial
+
+```nasm
+global  _start
+
+section .text
+_start:
+    mov al, 0     ; F0 = 0 (optimisé: 1 byte)
+    mov bl, 1     ; F1 = 1 (optimisé: 1 byte)
+    ; ... suite du programme
+```
+
+### Prochaines Étapes
+
+```
+1. ✅ Initialisation (mov)
+2. ⏳ Addition (add) → Calculer Fn = Fn-1 + Fn-2
+3. ⏳ Boucles (loop, jmp) → Répéter calcul
+4. ⏳ I/O (syscall) → Afficher résultats
+```
+---
 
 
 
