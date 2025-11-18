@@ -2988,21 +2988,2019 @@ _start:
     mov bl, 1     ; F1 = 1 (optimisé: 1 byte)
     ; ... suite du programme
 ```
+---
 
-### Prochaines Étapes
+# Instructions Arithmétiques
+
+## Vue d'Ensemble
+
+### Catégories d'Instructions
 
 ```
-1. ✅ Initialisation (mov)
-2. ⏳ Addition (add) → Calculer Fn = Fn-1 + Fn-2
-3. ⏳ Boucles (loop, jmp) → Répéter calcul
-4. ⏳ I/O (syscall) → Afficher résultats
+Instructions Arithmétiques
+├─ Unaires (1 opérande)
+│  ├─ inc (incrémenter)
+│  └─ dec (décrémenter)
+│
+├─ Binaires (2 opérandes)
+│  ├─ add (addition)
+│  ├─ sub (soustraction)
+│  └─ imul (multiplication)
+│
+└─ Bitwise (opérations bit par bit)
+   ├─ not (inversion)
+   ├─ and (ET logique)
+   ├─ or (OU logique)
+   └─ xor (OU exclusif)
+```
+
+**Traitement:** Principalement par l'**ALU** (Arithmetic Logic Unit) du CPU
+
+## 1️⃣ Instructions Unaires
+
+### Définition
+**Unaire** = Prend **1 seul opérande**
+
+### Instructions Principales
+
+| Instruction | Description | Exemple | Résultat |
+|-------------|-------------|---------|----------|
+| **inc** | Incrémenter de 1 | `inc rax` | `rax++` ou `rax += 1` |
+| **dec** | Décrémenter de 1 | `dec rax` | `rax--` ou `rax -= 1` |
+
+### `inc` - Incrémentation
+
+#### Syntaxe
+```nasm
+inc operand
+```
+
+#### Exemple: `rax = 1`
+```nasm
+inc rax        ; rax devient 2
+```
+
+**Équivalent en C:**
+```c
+rax++;
+// ou
+rax += 1;
+```
+
+---
+
+### `dec` - Décrémentation
+
+#### Syntaxe
+```nasm
+dec operand
+```
+
+#### Exemple: `rax = 5`
+```nasm
+dec rax        ; rax devient 4
+```
+
+**Équivalent en C:**
+```c
+rax--;
+// ou
+rax -= 1;
+```
+
+### Application: Fibonacci
+
+#### Code
+```nasm
+global  _start
+
+section .text
+_start:
+    mov al, 0     ; F0 = 0
+    mov bl, 0     ; Initialise bl à 0
+    inc bl        ; F1 = 1 (incrémente bl)
+```
+
+#### Debug avec GDB
+
+**Avant inc:**
+```
+$rbx   : 0x0
+```
+
+**Après inc bl:**
+```
+$rbx   : 0x1
+```
+
+#### Avantage
+✅ Plus lisible que `mov bl, 1`  
+✅ Utile dans boucles (compteurs)  
+✅ Compact (instruction courte)
+
+## 2️⃣ Instructions Binaires
+
+### Définition
+**Binaire** = Prend **2 opérandes** (source + destination)
+
+### Règle Fondamentale
+> ⚠️ **Résultat toujours stocké dans DESTINATION**  
+> Source reste **INCHANGÉE**
+
+### Instructions Principales
+
+| Instruction | Description | Exemple | Résultat |
+|-------------|-------------|---------|----------|
+| **add** | Addition | `add rax, rbx` | `rax = rax + rbx` |
+| **sub** | Soustraction | `sub rax, rbx` | `rax = rax - rbx` |
+| **imul** | Multiplication | `imul rax, rbx` | `rax = rax * rbx` |
+
+### `add` - Addition
+
+#### Syntaxe
+```nasm
+add destination, source
+```
+
+#### Comportement
+```
+destination = destination + source
+source = inchangée
+```
+
+#### Exemple: `rax = 5`, `rbx = 3`
+```nasm
+add rax, rbx
+```
+
+**Résultat:**
+```
+rax = 5 + 3 = 8
+rbx = 3 (inchangé)
+```
+
+**Équivalent C:**
+```c
+rax = rax + rbx;
+// ou
+rax += rbx;
+```
+
+### Application: Calcul Fibonacci
+
+#### Formule Fibonacci
+```
+Fn = Fn-1 + Fn-2
+```
+
+#### Code Étape par Étape
+```nasm
+global  _start
+
+section .text
+_start:
+    mov al, 0     ; F0 = 0 (rax = 0)
+    mov bl, 0     ; bl = 0
+    inc bl        ; F1 = 1 (rbx = 1)
+    add rax, rbx  ; F2 = F0 + F1 = 0 + 1 = 1
+```
+
+#### Debug avec GDB
+
+**Avant add:**
+```
+$rax   : 0x0
+$rbx   : 0x1
+```
+
+**Après add rax, rbx:**
+```
+$rax   : 0x1    (0x0 + 0x1 = 0x1) ✅
+$rbx   : 0x1    (inchangé) ✅
+```
+
+### `sub` - Soustraction
+
+#### Syntaxe
+```nasm
+sub destination, source
+```
+
+#### Comportement
+```
+destination = destination - source
+source = inchangée
+```
+
+#### Exemple: `rax = 10`, `rbx = 3`
+```nasm
+sub rax, rbx
+```
+
+**Résultat:**
+```
+rax = 10 - 3 = 7
+rbx = 3 (inchangé)
+```
+
+**Équivalent C:**
+```c
+rax = rax - rbx;
+// ou
+rax -= rbx;
+```
+
+### `imul` - Multiplication
+
+#### Syntaxe
+```nasm
+imul destination, source
+```
+
+#### Comportement
+```
+destination = destination * source
+source = inchangée
+```
+
+#### Exemple: `rax = 4`, `rbx = 5`
+```nasm
+imul rax, rbx
+```
+
+**Résultat:**
+```
+rax = 4 * 5 = 20
+rbx = 5 (inchangé)
+```
+
+**Équivalent C:**
+```c
+rax = rax * rbx;
+// ou
+rax *= rbx;
+```
+
+> **Note:** `imul` = Multiplication signée (signed)  
+> Il existe aussi `mul` pour multiplication non-signée
+
+## 3️⃣ Instructions Bitwise
+
+### Définition
+**Bitwise** = Opérations au **niveau des bits** (0 et 1)
+
+### Vue d'Ensemble
+
+| Instruction | Type | Opération |
+|-------------|------|-----------|
+| **not** | Unaire | Inversion (0→1, 1→0) |
+| **and** | Binaire | ET logique |
+| **or** | Binaire | OU logique |
+| **xor** | Binaire | OU exclusif |
+
+### `not` - Inversion Bitwise
+
+#### Syntaxe
+```nasm
+not operand
+```
+
+#### Comportement
+Inverse **tous les bits**:
+- `0` devient `1`
+- `1` devient `0`
+
+#### Exemple: `rax = 1` (`00000001` en binaire)
+```nasm
+not rax
+```
+
+**Résultat:**
+```
+Avant:  00000001  (1)
+NOT
+Après:  11111110  (254 en 8-bit unsigned)
+```
+
+### `and` - ET Logique Bitwise
+
+#### Syntaxe
+```nasm
+and destination, source
+```
+
+#### Table de Vérité AND
+
+| Bit A | Bit B | A AND B |
+|-------|-------|---------|
+| 0 | 0 | 0 |
+| 0 | 1 | 0 |
+| 1 | 0 | 0 |
+| 1 | 1 | **1** ✅ |
+
+**Règle:** Résultat = 1 **seulement si les deux bits sont 1**
+
+#### Exemple: `rax = 1`, `rbx = 2`
+```nasm
+and rax, rbx
+```
+
+**Calcul:**
+```
+rax:  00000001  (1)
+rbx:  00000010  (2)
+AND
+      00000000  (0)
+```
+
+**Résultat:** `rax = 0`
+
+### `or` - OU Logique Bitwise
+
+#### Syntaxe
+```nasm
+or destination, source
+```
+
+#### Table de Vérité OR
+
+| Bit A | Bit B | A OR B |
+|-------|-------|--------|
+| 0 | 0 | 0 |
+| 0 | 1 | **1** ✅ |
+| 1 | 0 | **1** ✅ |
+| 1 | 1 | **1** ✅ |
+
+**Règle:** Résultat = 1 **si au moins un bit est 1**
+
+#### Exemple: `rax = 1`, `rbx = 2`
+```nasm
+or rax, rbx
+```
+
+**Calcul:**
+```
+rax:  00000001  (1)
+rbx:  00000010  (2)
+OR
+      00000011  (3)
+```
+
+**Résultat:** `rax = 3`
+
+### `xor` - OU Exclusif Bitwise
+
+#### Syntaxe
+```nasm
+xor destination, source
+```
+
+#### Table de Vérité XOR
+
+| Bit A | Bit B | A XOR B |
+|-------|-------|---------|
+| 0 | 0 | 0 |
+| 0 | 1 | **1** ✅ |
+| 1 | 0 | **1** ✅ |
+| 1 | 1 | 0 |
+
+**Règle:** Résultat = 1 **si les bits sont différents**
+
+#### Exemple: `rax = 1`, `rbx = 2`
+```nasm
+xor rax, rbx
+```
+
+**Calcul:**
+```
+rax:  00000001  (1)
+rbx:  00000010  (2)
+XOR
+      00000011  (3)
+```
+
+**Résultat:** `rax = 3`
+
+## XOR - L'Astuce Magique
+
+### Mettre un Registre à Zéro
+
+#### Propriété XOR
+```
+A XOR A = 0
+(bits identiques → 0)
+```
+
+#### Usage: Zéroïsation Efficace
+
+**Méthode Inefficace:**
+```nasm
+mov rax, 0        ; 5+ bytes
+```
+
+**Méthode Efficace:**
+```nasm
+xor rax, rax      ; 2-3 bytes ✅
+```
+
+**Pourquoi ça marche?**
+```
+Exemple: rax = 5 (00000101)
+
+  00000101
+XOR
+  00000101
+= 00000000  (0) ✅
+```
+
+**Tous les bits identiques → Tous deviennent 0!**
+
+### Application: Fibonacci Optimisé
+
+#### Avant (moins efficace)
+```nasm
+global  _start
+
+section .text
+_start:
+    mov al, 0     ; 2 bytes
+    mov bl, 0     ; 2 bytes
+    inc bl
+    add rax, rbx
+```
+
+#### Après (optimisé avec XOR)
+```nasm
+global  _start
+
+section .text
+_start:
+    xor rax, rax  ; 2-3 bytes ✅ Plus court!
+    xor rbx, rbx  ; 2-3 bytes ✅
+    inc rbx
+    add rax, rbx
+```
+
+#### Debug avec GDB
+
+**Après xor rax, rax:**
+```
+$rax   : 0x0  ✅
+```
+
+**Après xor rbx, rbx:**
+```
+$rbx   : 0x0  ✅
+```
+
+**Après inc rbx:**
+```
+$rbx   : 0x1  ✅
+```
+
+**Après add rax, rbx:**
+```
+$rax   : 0x1  ✅ (0 + 1 = 1)
+$rbx   : 0x1  ✅ (inchangé)
+```
+
+**Résultat:** Même comportement, code plus court!
+
+## Tableaux Récapitulatifs
+
+### Instructions Unaires
+
+| Instruction | Effet | Avant | Après |
+|-------------|-------|-------|-------|
+| `inc rax` | `rax + 1` | `rax = 5` | `rax = 6` |
+| `dec rax` | `rax - 1` | `rax = 5` | `rax = 4` |
+
+### Instructions Binaires
+
+| Instruction | Effet | Exemple (rax=5, rbx=3) | Résultat |
+|-------------|-------|------------------------|----------|
+| `add rax, rbx` | `rax = rax + rbx` | `5 + 3` | `rax = 8, rbx = 3` |
+| `sub rax, rbx` | `rax = rax - rbx` | `5 - 3` | `rax = 2, rbx = 3` |
+| `imul rax, rbx` | `rax = rax * rbx` | `5 * 3` | `rax = 15, rbx = 3` |
+
+### Instructions Bitwise
+
+| Instruction | Exemple (rax=1, rbx=2) | Binaire | Résultat |
+|-------------|------------------------|---------|----------|
+| `not rax` | `NOT 00000001` | `11111110` | `rax = 254` |
+| `and rax, rbx` | `00000001 AND 00000010` | `00000000` | `rax = 0` |
+| `or rax, rbx` | `00000001 OR 00000010` | `00000011` | `rax = 3` |
+| `xor rax, rbx` | `00000001 XOR 00000010` | `00000011` | `rax = 3` |
+
+### XOR Spécial: Zéroïsation
+
+| Opération | Binaire | Résultat |
+|-----------|---------|----------|
+| `xor rax, rax` | Tout bit identique | `rax = 0` |
+| `xor rbx, rbx` | Tout bit identique | `rbx = 0` |
+| `xor rcx, rcx` | Tout bit identique | `rcx = 0` |
+
+## Cas d'Usage Pratiques
+
+### 1. Compteur de Boucle
+```nasm
+xor rcx, rcx      ; rcx = 0 (compteur)
+loop_start:
+    inc rcx       ; rcx++
+    ; ... code ...
+    cmp rcx, 10
+    jl loop_start ; Répéter si rcx < 10
+```
+
+### 2. Calcul Fibonacci
+```nasm
+; F0 = 0, F1 = 1
+xor rax, rax      ; F0 = 0
+xor rbx, rbx
+inc rbx           ; F1 = 1
+
+; F2 = F1 + F0
+add rax, rbx      ; F2 = 0 + 1 = 1
+```
+
+### 3. Masquage avec AND
+```nasm
+mov rax, 0xFF     ; rax = 11111111
+and rax, 0x0F     ; Garder seulement 4 bits de droite
+                  ; rax = 00001111
+```
+
+### 4. Mise à 1 de Bits avec OR
+```nasm
+mov rax, 0x00     ; rax = 00000000
+or rax, 0x05      ; Mettre bits 0 et 2 à 1
+                  ; rax = 00000101
+```
+
+## Optimisations Shellcode
+
+### Comparaison Tailles
+
+| Opération | Inefficace | Efficace | Gain |
+|-----------|------------|----------|------|
+| Zéro | `mov rax, 0` (5 bytes) | `xor rax, rax` (3 bytes) | **40%** |
+| Incrément +1 | `add rax, 1` (4 bytes) | `inc rax` (3 bytes) | **25%** |
+| Décrément -1 | `sub rax, 1` (4 bytes) | `dec rax` (3 bytes) | **25%** |
+
+**Conseil:** Toujours privilégier les instructions les plus courtes!
+
+## Debug Tips
+
+### Vérifier Opérations Binaires
+
+```bash
+gef➤ b _start
+gef➤ r
+
+# Avant add
+gef➤ info registers rax rbx
+gef➤ si
+
+# Après add
+gef➤ info registers rax rbx
+# Vérifier: rax = ancienne_rax + rbx
+```
+
+### Observer Bits avec XOR
+
+```bash
+gef➤ x/t $rax      # Afficher en binaire (t = two's complement)
+gef➤ si
+gef➤ x/t $rax      # Comparer avant/après
+```
+
+## ⚠️ Points d'Attention
+
+### Source vs Destination
+
+```
+❌ Ne PAS confondre ordre!
+   sub rax, rbx  =  rax - rbx
+   sub rbx, rax  =  rbx - rax  (différent!)
+   
+✅ Résultat toujours dans DESTINATION (1er opérande)
+```
+
+### Overflow
+
+```
+⚠️ Addition/Multiplication peuvent overflow
+   add rax, rbx  où rax+rbx > max(rax)
+   → Résultat modulé (wrap around)
+```
+
+### Signed vs Unsigned
+
+```
+imul = Multiplication signée
+mul  = Multiplication non-signée
+```
+
+## Fibonacci Complet (Jusqu'ici)
+
+### Code Optimisé
+
+```nasm
+global  _start
+
+section .text
+_start:
+    xor rax, rax  ; F0 = 0 (optimisé avec xor)
+    xor rbx, rbx
+    inc rbx       ; F1 = 1 (incrémentation)
+    add rax, rbx  ; F2 = F0 + F1 = 0 + 1 = 1
+```
+
+### Résultat GDB
+
+```
+Initial:
+$rax   : 0x0
+$rbx   : 0x0
+
+Après inc:
+$rbx   : 0x1
+
+Après add:
+$rax   : 0x1  (F2 = 1 ✅)
+$rbx   : 0x1  (F1 = 1 ✅)
+```
+
+## Pro Tips
+
+### Shellcoding
+
+```
+✅ xor rax, rax    (2-3 bytes)
+❌ mov rax, 0      (5+ bytes)
+
+✅ inc rax         (3 bytes)
+❌ add rax, 1      (4 bytes)
+```
+
+### Debugging
+
+```bash
+# Comparer avant/après
+gef➤ info registers
+gef➤ si
+gef➤ info registers
+```
+
+### Bitwise Power
+
+```nasm
+; Masquer
+and rax, 0xFF      ; Garder seulement 8 bits bas
+
+; Mettre à 1
+or rax, 0x80       ; Mettre bit 7 à 1
+
+; Toggle
+xor rax, 0xFF      ; Inverser 8 bits bas
+```
+
+---
+
+# Boucles (Loops)
+
+## Instructions de Contrôle de Flux
+
+### Vue d'Ensemble
+
+**Assembly = Line-based** (exécution séquentielle ligne par ligne)
+
+**Mais les programmes réels sont plus complexes!**
+
+```
+Programme Simple:     Programme Réel:
+Ligne 1              ┌─ Ligne 1
+Ligne 2              │  Ligne 2
+Ligne 3              │  Ligne 3 ──┐
+Ligne 4              │  Ligne 4   │ Loop
+Ligne 5              │  Ligne 5   │
+                     └─ Ligne 6 ◄─┘
+                        Ligne 7
+                        Ligne 8 → Branch
+```
+
+### Types d'Instructions de Contrôle
+
+```
+Instructions de Contrôle
+├─ Loops (Boucles)
+│  └─ Répéter instructions N fois
+│
+├─ Branching (Branchements)
+│  └─ Sauts conditionnels (if/else)
+│
+└─ Function Calls (Appels de Fonction)
+   └─ Exécuter sous-routines
+```
+
+## Structure des Boucles
+
+### Concept
+
+**Boucle** = Ensemble d'instructions qui se répètent `rcx` fois
+
+### Anatomie d'une Boucle
+
+```nasm
+mov rcx, N          ; Nombre d'itérations
+
+labelBoucle:
+    instruction 1    ; Ces instructions
+    instruction 2    ; seront répétées
+    instruction 3    ; N fois
+    loop labelBoucle ; Décrémente rcx et saute
+```
+
+### Fonctionnement de `loop`
+
+```
+┌─────────────────────────────────┐
+│  loop labelBoucle               │
+│         ↓                       │
+│  1. dec rcx  (rcx = rcx - 1)   │
+│  2. if rcx != 0: jump to label │
+│  3. if rcx == 0: continue      │
+└─────────────────────────────────┘
+```
+## Instructions Loop
+
+### Instruction `mov rcx, N`
+
+**Syntaxe:**
+```nasm
+mov rcx, nombre_iterations
+```
+
+**Fonction:** Initialise le compteur de boucle
+
+**Exemple:**
+```nasm
+mov rcx, 10        ; Boucle 10 fois
+```
+
+### Instruction `loop`
+
+**Syntaxe:**
+```nasm
+loop label
+```
+
+**Fonction:**
+1. Décrémente `rcx` (rcx--)
+2. Si `rcx != 0` → Saute au label
+3. Si `rcx == 0` → Continue après la boucle
+
+**Exemple:**
+```nasm
+loop_start:
+    ; instructions
+    loop loop_start
+```
+
+## Application: Boucle Fibonacci
+
+### Logique de Calcul
+
+#### État Initial
+```
+Last (rax) = 0
+Current (rbx) = 1
+```
+
+#### Itération
+```
+1. Next = Last + Current
+   → add rax, rbx (rax = 0 + 1 = 1)
+
+2. Last = Current
+3. Current = Next
+   → xchg rax, rbx (swap valeurs)
+
+4. Répéter
+```
+
+### Exemple Itération Manuelle
+
+```
+Début:
+Last = 0, Current = 1
+
+Itération 1:
+├─ Next = 0 + 1 = 1
+├─ Last = 1 (ancien Current)
+└─ Current = 1 (Next)
+   Résultat: 1, 1
+
+Itération 2:
+├─ Next = 1 + 1 = 2
+├─ Last = 1
+└─ Current = 2
+   Résultat: 1, 2
+
+Itération 3:
+├─ Next = 1 + 2 = 3
+├─ Last = 2
+└─ Current = 3
+   Résultat: 2, 3
+
+Itération 4:
+├─ Next = 2 + 3 = 5
+├─ Last = 3
+└─ Current = 5
+   Résultat: 3, 5
+```
+
+**Séquence:** 0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55...
+
+## Debug avec GDB
+### Itération 0 (Avant 1ère boucle)
+
+```
+───────────────────────────────── registers ────
+$rax   : 0x0         (F0 = 0)
+$rbx   : 0x1         (F1 = 1)
+$rcx   : 0xa         (10 itérations)
+```
+
+**État:** Valeurs initiales, 10 itérations à faire
+
+### Itération 1
+
+```bash
+gef➤ c                  # Continue
+```
+
+```
+───────────────────────────────── registers ────
+$rax   : 0x1         (F1 = 1)
+$rbx   : 0x1         (F2 = 1)
+$rcx   : 0x9         (9 itérations restantes)
+```
+
+**Calcul:**
+- add: `0 + 1 = 1`
+- xchg: rax=1, rbx=1
+- loop: rcx=9
+
+### Itération 2
+
+```bash
+gef➤ c
+```
+
+```
+───────────────────────────────── registers ────
+$rax   : 0x1         (F2 = 1)
+$rbx   : 0x2         (F3 = 2)
+$rcx   : 0x8
+```
+
+**Calcul:**
+- add: `1 + 1 = 2`
+- xchg: rax=1, rbx=2
+- loop: rcx=8
+
+### Itération 3
+
+```bash
+gef➤ c
+```
+
+```
+───────────────────────────────── registers ────
+$rax   : 0x2         (F3 = 2)
+$rbx   : 0x3         (F4 = 3)
+$rcx   : 0x7
+```
+
+**Calcul:**
+- add: `1 + 2 = 3`
+
+### Itération 4
+
+```bash
+gef➤ c
+```
+
+```
+───────────────────────────────── registers ────
+$rax   : 0x3         (F4 = 3)
+$rbx   : 0x5         (F5 = 5)
+$rcx   : 0x6
+```
+
+**Calcul:**
+- add: `2 + 3 = 5`
+
+### Itération 5
+
+```bash
+gef➤ c
+```
+
+```
+───────────────────────────────── registers ────
+$rax   : 0x5         (F5 = 5)
+$rbx   : 0x8         (F6 = 8)
+$rcx   : 0x5
+```
+
+**Calcul:**
+- add: `3 + 5 = 8`
+
+**Séquence jusqu'ici:** 0, 1, 1, 2, 3, 5, 8 ✅
+
+### Itération 10 (Dernière)
+
+```bash
+gef➤ c
+# ... (continuer jusqu'à dernière itération)
+```
+
+```
+───────────────────────────────── registers ────
+$rax   : 0x22        (34 en décimal)
+$rbx   : 0x37        (55 en décimal)
+$rcx   : 0x1         (1 itération restante)
+```
+
+### Vérification Décimale
+
+```bash
+gef➤ p/d $rbx
+$3 = 55
+```
+
+**Résultat:** F10 = 55 ✅
+
+**Séquence complète:** 0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55
+
+## Tableau des Itérations
+
+| Itération | rax (Fn-1) | rbx (Fn) | rcx | Calcul |
+|-----------|------------|----------|-----|--------|
+| **0** | 0x0 (0) | 0x1 (1) | 10 | Initial |
+| **1** | 0x1 (1) | 0x1 (1) | 9 | 0+1=1 |
+| **2** | 0x1 (1) | 0x2 (2) | 8 | 1+1=2 |
+| **3** | 0x2 (2) | 0x3 (3) | 7 | 1+2=3 |
+| **4** | 0x3 (3) | 0x5 (5) | 6 | 2+3=5 |
+| **5** | 0x5 (5) | 0x8 (8) | 5 | 3+5=8 |
+| **6** | 0x8 (8) | 0xd (13) | 4 | 5+8=13 |
+| **7** | 0xd (13) | 0x15 (21) | 3 | 8+13=21 |
+| **8** | 0x15 (21) | 0x22 (34) | 2 | 13+21=34 |
+| **9** | 0x22 (34) | 0x37 (55) | 1 | 21+34=55 |
+| **10** | 0x37 (55) | 0x59 (89) | 0 | 34+55=89 |
+
+## Diagramme de Flux
+
+### Structure Loop
+
+```
+     mov rcx, 10
+          ↓
+    ┌─────────────┐
+    │  loopFib:   │ ◄─────┐
+    ├─────────────┤       │
+    │ add rax,rbx │       │
+    │ xchg rax,rbx│       │
+    │ loop loopFib│───────┘
+    └─────────────┘
+          ↓
+    (rcx = 0, sortie)
+```
+
+### Flux Détaillé
+
+```
+START
+  ↓
+Initialiser rax=0, rbx=1, rcx=10
+  ↓
+┌─────────────────┐
+│ rcx > 0 ?       │
+└────┬───────┬────┘
+     │ OUI   │ NON
+     ↓       ↓
+  ┌─────┐  FIN
+  │ add │
+  │xchg │
+  │loop │
+  └──┬──┘
+     │
+     └──────┘ (boucle)
+```
+
+## Concepts Clés
+
+### Le Registre `rcx`
+
+**Rôle:**
+```
+rcx = Compteur de boucle (Loop Counter)
+```
+
+**Automatique:**
+- `loop` décrémente automatiquement `rcx`
+- Pas besoin de `dec rcx` manuel
+
+**Convention:**
+- Toujours utiliser `rcx` pour les boucles
+- Préserver `rcx` si appelé depuis fonction
+
+### Pourquoi `xchg` est Crucial
+
+**Sans xchg:**
+```nasm
+add rax, rbx    ; rax = Next
+; Comment mettre ancien Current dans rax?
+; Comment mettre Next dans rbx?
+; → Besoin d'un registre temporaire!
+```
+
+**Avec xchg:**
+```nasm
+add rax, rbx    ; rax = Next
+xchg rax, rbx   ; Swap en 1 instruction! ✅
+```
+
+**Avantage:**
+- ✅ 1 seule instruction
+- ✅ Pas de registre temporaire
+- ✅ Code plus court
+
+## Variations de Boucle
+
+### Boucle Simple (Compteur)
+
+```nasm
+mov rcx, 5          ; 5 itérations
+
+count_loop:
+    inc rax         ; rax++
+    loop count_loop
+
+; Résultat: rax = 5
+```
+
+### Boucle avec Calcul
+
+```nasm
+mov rcx, 10         ; 10 itérations
+xor rax, rax        ; rax = 0
+
+sum_loop:
+    add rax, rcx    ; Additionner compteur
+    loop sum_loop
+
+; Résultat: rax = 10+9+8+...+1 = 55
+```
+
+### Boucle Imbriquée
+
+```nasm
+mov rcx, 3          ; Boucle externe
+outer_loop:
+    push rcx        ; Sauvegarder rcx externe
+    mov rcx, 5      ; Boucle interne
+    
+    inner_loop:
+        ; Instructions
+        loop inner_loop
+    
+    pop rcx         ; Restaurer rcx externe
+    loop outer_loop
+
+; Total: 3 × 5 = 15 itérations
+```
+
+## ⚠️ Pièges à Éviter
+
+### Piège 1: Oublier d'Initialiser rcx
+
+```nasm
+❌ MAUVAIS:
+loopFib:
+    add rax, rbx
+    loop loopFib    ; rcx non initialisé = boucle aléatoire!
+
+✅ BON:
+mov rcx, 10         ; Initialiser AVANT la boucle
+loopFib:
+    add rax, rbx
+    loop loopFib
+```
+
+### Piège 2: Modifier rcx dans la Boucle
+
+```nasm
+❌ MAUVAIS:
+mov rcx, 10
+loop_bad:
+    inc rcx         ; ERREUR: modifie le compteur!
+    loop loop_bad   ; Boucle infinie probable
+
+✅ BON:
+mov rcx, 10
+loop_good:
+    inc rax         ; Utiliser autre registre
+    loop loop_good
+```
+
+### Piège 3: Boucles Imbriquées Sans Sauvegarder rcx
+
+```nasm
+❌ MAUVAIS:
+mov rcx, 3
+outer:
+    mov rcx, 5      ; Écrase rcx externe!
+    inner:
+        loop inner
+    loop outer      ; rcx déjà modifié = bug
+
+✅ BON:
+mov rcx, 3
+outer:
+    push rcx        ; Sauvegarder
+    mov rcx, 5
+    inner:
+        loop inner
+    pop rcx         ; Restaurer
+    loop outer
+```
+
+## Quick Reference
+
+### Instructions Essentielles
+
+```nasm
+; Initialiser compteur
+mov rcx, N          ; N itérations
+
+; Définir label de boucle
+label:
+    ; instructions
+    loop label      ; Décrémente rcx et boucle
+```
+
+### Template Boucle Fibonacci
+
+```nasm
+; Initialisation
+xor rax, rax        ; F(n-1) = 0
+xor rbx, rbx
+inc rbx             ; F(n) = 1
+mov rcx, N          ; N itérations
+
+; Boucle
+loopFib:
+    add rax, rbx    ; Next = Last + Current
+    xchg rax, rbx   ; Swap
+    loop loopFib    ; Répéter
+```
+
+### Commandes GDB pour Boucles
+
+```bash
+# Break au début de la boucle
+gef➤ b loopLabel
+
+# Continue à chaque itération
+gef➤ c
+
+# Voir compteur
+gef➤ p/d $rcx
+
+# Voir registres
+gef➤ info registers rax rbx rcx
+```
+
+## Fibonacci Complet (Avec Boucle)
+
+### Code Final
+
+```nasm
+global  _start
+
+section .text
+_start:
+    ; Initialisation
+    xor rax, rax    ; F0 = 0
+    xor rbx, rbx    
+    inc rbx         ; F1 = 1
+    mov rcx, 10     ; 10 itérations
+
+    ; Boucle de calcul
+loopFib:
+    add rax, rbx    ; Fn = Fn-1 + Fn-2
+    xchg rax, rbx   ; Swap pour prochaine itération
+    loop loopFib    ; Répéter
+
+    ; À ce stade:
+    ; rax = F9 = 34
+    ; rbx = F10 = 55
+```
+
+### Progression du Programme
+
+```
+✅ Chapitre 1: mov, lea, xchg → Initialisation
+✅ Chapitre 2: add, xor, inc → Calculs de base
+✅ Chapitre 3: loop → Automatisation!
+
+Prochaines étapes:
+⏳ Chapitre 4: Conditions (cmp, jmp) → Logique
+⏳ Chapitre 5: I/O (syscall) → Affichage résultats
+⏳ Chapitre 6: Programme complet
+```
+
+## Pro Tips
+
+### Expérimentation
+
+```nasm
+; Essayer différentes valeurs
+mov rcx, 5      ; F5 = 5
+mov rcx, 15     ; F15 = 610
+mov rcx, 20     ; F20 = 6765
+```
+
+**Augmenter rcx pour voir nombres plus grands!**
+
+### Conversion Hex → Décimal
+
+```bash
+gef➤ p/d $rbx       # Afficher en décimal
+gef➤ p/x $rbx       # Afficher en hex
+```
+
+### Observer Toute la Séquence
+
+```bash
+# Break avant boucle
+gef➤ b _start
+gef➤ r
+
+# Break dans boucle
+gef➤ b loopFib
+
+# Continue itération par itération
+gef➤ c
+gef➤ c
+gef➤ c
+# ...noter les valeurs à chaque fois
+```
+
+---
+
+# Branchements Inconditionnels
+
+## Types d'Instructions de Branchement
+
+### Vue d'Ensemble
+
+```
+Instructions de Contrôle
+├─ Loops (Boucles)
+│  └─ loop → Sauts automatiques avec compteur
+│
+└─ Branching (Branchements)
+   ├─ Inconditionnels → Sautent TOUJOURS
+   │  └─ jmp
+   │
+   └─ Conditionnels → Sautent SI condition vraie
+      └─ je, jne, jl, jg, etc. (prochain chapitre)
+```
+
+## Instruction `jmp` - Jump
+
+### Définition
+
+**jmp** = Saut **inconditionnel** vers un label/adresse
+
+**Inconditionnel** = Saute **TOUJOURS**, peu importe les conditions
+
+### Syntaxe
+
+```nasm
+jmp destination
+```
+
+**Destination peut être:**
+- Un label: `jmp loopFib`
+- Une adresse: `jmp 0x401000`
+- Un registre: `jmp rax` (adresse dans rax)
+
+### Comportement
+
+```
+┌─────────────────────────────┐
+│  jmp label                  │
+│         ↓                   │
+│  1. Saute à 'label'         │
+│  2. Continue depuis label   │
+│  3. PAS de retour auto      │
+└─────────────────────────────┘
+```
+
+**Important:**
+- ⚠️ Pas de retour automatique (contrairement aux fonctions)
+- ⚠️ Exécution continue depuis la destination
+- ⚠️ Si utilisé en boucle → Boucle infinie!
+
+## Comparaison: `loop` vs `jmp`
+
+### Différences Fondamentales
+
+| Caractéristique | `loop` | `jmp` |
+|-----------------|--------|-------|
+| **Type** | Conditionnel (vérifie rcx) | Inconditionnel |
+| **Compteur** | Décrémente rcx automatiquement | N'utilise PAS rcx |
+| **Condition d'arrêt** | rcx == 0 | Aucune ❌ |
+| **Usage** | Boucles avec nombre fixe d'itérations | Sauts toujours nécessaires |
+| **Risque** | Se termine automatiquement | Boucle infinie si mal utilisé ⚠️ |
+
+### Comparaison Visuelle
+
+#### Avec `loop`
+```nasm
+mov rcx, 10
+label:
+    ; instructions
+    loop label      ; rcx--, jump si rcx != 0
+                    ; SORT quand rcx = 0 ✅
+```
+
+#### Avec `jmp`
+```nasm
+mov rcx, 10
+label:
+    ; instructions
+    jmp label       ; Jump TOUJOURS
+                    ; NE SORT JAMAIS ❌
+```
+
+## Problème de `jmp` pour Boucles
+
+### Pourquoi c'est un Problème?
+
+```
+jmp loopFib
+     ↓
+Pas de condition d'arrêt
+     ↓
+Saute TOUJOURS
+     ↓
+Boucle INFINIE
+     ↓
+Programme ne termine JAMAIS
+```
+
+### Comparaison Concrète
+
+#### Avec `loop` (Correct)
+
+```nasm
+mov rcx, 10
+label:
+    ; code
+    loop label
+    
+; Programme sort ici après 10 itérations ✅
+```
+
+**Résultat:** 10 itérations, puis continue
+
+#### Avec `jmp` (Boucle Infinie)
+
+```nasm
+mov rcx, 10         ; rcx inutile
+label:
+    ; code
+    jmp label       ; Saute TOUJOURS
+    
+; Cette ligne n'est JAMAIS atteinte ❌
+```
+
+**Résultat:** Boucle infinie, programme bloqué
+
+## 🎯 Usages Appropriés de `jmp`
+
+### ✅ Quand Utiliser `jmp`
+
+#### 1. Sauts Obligatoires (Toujours Nécessaires)
+
+```nasm
+cmp rax, 0
+je zero_case
+jmp non_zero_case    ; Si pas zéro, TOUJOURS sauter ici
+
+zero_case:
+    ; traiter cas zéro
+    jmp end
+
+non_zero_case:
+    ; traiter cas non-zéro
+
+end:
+    ; continuer
+```
+
+#### 2. Redirection de Flux
+
+```nasm
+; Choix entre plusieurs chemins
+cmp rbx, 1
+je option1
+cmp rbx, 2
+je option2
+jmp default         ; Si aucun match, aller au défaut
+
+option1:
+    ; code option 1
+    jmp done
+
+option2:
+    ; code option 2
+    jmp done
+
+default:
+    ; code par défaut
+
+done:
+    ; continuer
+```
+
+#### 3. Sortie Prématurée
+
+```nasm
+loop_start:
+    ; vérifications
+    cmp rax, limite
+    jge sortie       ; Si >= limite, sortir
+
+    ; code de boucle
+    inc rcx
+    jmp loop_start
+
+sortie:
+    ; après boucle
+```
+
+### ❌ Quand NE PAS Utiliser `jmp`
+
+#### Boucles Avec Compteur Fixe
+
+```nasm
+❌ MAUVAIS:
+mov rcx, 10
+loop_bad:
+    ; code
+    jmp loop_bad     ; Boucle infinie!
+
+✅ BON:
+mov rcx, 10
+loop_good:
+    ; code
+    loop loop_good   ; Sort après 10 itérations
+```
+
+#### Boucles Sans Condition de Sortie
+
+```nasm
+❌ MAUVAIS:
+label:
+    inc rax
+    jmp label        ; Pas de sortie = boucle infinie
+
+✅ BON:
+label:
+    inc rax
+    cmp rax, 100
+    jl label         ; Sort quand rax >= 100
+```
+
+## Points d'Attention
+
+### rcx N'est PAS Utilisé
+
+```
+jmp ignore rcx complètement
+loop utilise rcx comme compteur
+
+Ne PAS confondre!
+```
+
+### Condition de Sortie Obligatoire
+
+```
+Pour toute boucle avec jmp:
+├─ DOIT avoir condition de sortie
+├─ Sinon = boucle infinie
+└─ Utiliser branching conditionnel (prochain chapitre)
 ```
 ---
 
+# Branchements Conditionnels
+
+## Instructions de Branchement Conditionnel
+
+### Définition
+
+**Jcc** = Jump if Condition Code
+- Traité **seulement si** une condition spécifique est remplie
+- Basé sur Destination (D) et Source (S)
+
+## Principales Conditions (Jcc)
+
+### Tableau des Instructions
+
+| Instruction | Condition | Description |
+|-------------|-----------|-------------|
+| **jz** | D = 0 | Destination égale à Zéro |
+| **jnz** | D ≠ 0 | Destination Non égale à Zéro |
+| **js** | D < 0 | Destination est Négative |
+| **jns** | D ≥ 0 | Destination Non Négative (0 ou positif) |
+| **jg** | D > S | Destination Greater than Source |
+| **jge** | D ≥ S | Destination Greater or Equal Source |
+| **jl** | D < S | Destination Less than Source |
+| **jle** | D ≤ S | Destination Less or Equal Source |
+
+**Référence complète:** Intel x86_64 manual - Section "Jcc-Jump if Condition Is Met"
+
+## Instructions Conditionnelles Autres
+
+### CMOVcc - Conditional Move
+
+**Exemple:**
+```nasm
+cmovz rax, rbx    ; mov rax, rbx SI condition = 0
+cmovl rax, rbx    ; mov rax, rbx SI condition <
+```
+
+### SETcc - Set Byte
+
+**Exemple:**
+```nasm
+setz rax    ; Met l'octet de rax à 1 si condition remplie, 0 sinon
+```
+## Registre RFLAGS
+
+### Structure
+
+- **64 bits** comme les autres registres
+- Ne contient **PAS de valeurs**, mais des **flag bits**
+- Chaque bit = 1 ou 0 selon résultat dernière instruction
+
+### Table Complète RFLAGS
+
+| Bit(s) | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12-13 |
+|--------|---|---|---|---|---|---|---|---|---|---|----|----|-------|
+| **Label** | CF | 1 | PF | 0 | AF | 0 | ZF | SF | TF | IF | DF | OF | IOPL |
+| **Description** | Carry | Rés | Parity | Rés | Aux Carry | Rés | Zero | Sign | Trap | Interrupt | Direction | Overflow | I/O Level |
+
+**Suite:** Bits 14-21 (NT, RF, VM, AC, VIF, VIP, ID) et 22-63 (réservés)
+
+### Sub-Registres
+
+```
+RFLAGS (64-bit)
+   ↓
+EFLAGS (32-bit)
+   ↓
+FLAGS (16-bit) ← Flags les plus significatifs
+```
+
+## Flags Principaux
+
+### Les 4 Flags Importants
+
+| Flag | Bit | Description |
+|------|-----|-------------|
+| **CF** (Carry Flag) | 0 | Indique si on a un float |
+| **PF** (Parity Flag) | 2 | Indique si nombre pair ou impair |
+| **ZF** (Zero Flag) | 6 | Indique si nombre est zéro |
+| **SF** (Sign Flag) | 7 | Indique si registre est négatif |
+
+**Nomenclature:**
+- ZF = 1 → "Zero" (ZR)
+- ZF = 0 → "Not Zero" (NZ)
+- Exemple: `jnz` = jump avec NZ
+
+## JNZ - Jump if Not Zero
+
+### Équivalence loop
+
+```
+loop loopFib = dec rcx + jnz loopFib
+```
+
+**Pourquoi loop existe?**
+- Fonction très commune
+- Réduit taille du code
+- Plus efficace que d'utiliser les deux instructions séparément
+
+**Observation:**
+- rcx décrémente à chaque fois
+- Zero flag OFF (minuscule)
+- Parity flag ON (MAJUSCULE) quand rcx impair
+
+> **Note GEF:** Flags en **MAJUSCULES** = ON
+
+**Dernière itération (rcx = 0):**
+```
+$rax   : 0x37    (55)
+$rbx   : 0x59    (89)
+$rcx   : 0x0
+$eflags: [ZERO carry PARITY adjust sign trap INTERRUPT direction overflow RESUME virtualx86 identification]
+```
+
+**Résultat:**
+- rcx = 0
+- Zero flag = ON (ZERO en majuscules)
+- `jnz` ne saute plus → Programme s'arrête
+
+## CMP - Compare
+
+### Définition
+
+**cmp** = Compare deux opérandes
+- Soustrait 2ème opérande du 1er (D1 - S2)
+- **Ne stocke PAS le résultat**
+- Met à jour les flags dans RFLAGS
+
+| Instruction | Description | Exemple |
+|-------------|-------------|---------|
+| **cmp** | Met à jour RFLAGS en faisant (first - second) | `cmp rax, rbx` → rax - rbx |
 
 
+### Règle Important
+
+> **1er opérande (Destination) = DOIT être un registre**  
+> 2ème opérande = registre, variable, ou valeur immédiate
 
 
+### Avantage vs sub
 
+**Avec sub:**
+```nasm
+sub rax, 10    ; Change rax! (rax = rax - 10)
+```
+
+**Avec cmp:**
+```nasm
+cmp rax, 10    ; NE change PAS rax! Compare seulement
+```
+
+**Avantage:** `cmp` ne modifie pas les opérandes
+
+## Application: Fibonacci avec cmp et js
+
+### Objectif
+
+Arrêter quand Fibonacci > 10
+
+### Logique
+
+```nasm
+cmp rbx, 10     ; rbx - 10
+js loopFib      ; Jump si résultat < 0
+```
+
+**Déroulement:**
+- rbx = 1 → `1 - 10 = -9` (négatif) → `js` saute ✅
+- rbx = 13 → `13 - 10 = 3` (positif) → `js` ne saute pas ❌
+
+### Code Complet
+
+```nasm
+global  _start
+
+section .text
+_start:
+    xor rax, rax    ; initialize rax to 0
+    xor rbx, rbx    ; initialize rbx to 0
+    inc rbx         ; increment rbx to 1
+
+loopFib:
+    add rax, rbx    ; get the next number
+    xchg rax, rbx   ; swap values
+    cmp rbx, 10     ; do rbx - 10
+    js loopFib      ; jump if result is <0
+```
+
+**Changements:**
+- ❌ Supprimé `mov rcx, 10` (plus besoin de compteur)
+- ✅ Ajouté `cmp rbx, 10`
+- ✅ Utilisé `js loopFib` (jump si négatif)
+
+---
+
+## 🔍 Debug GDB - cmp et js
+
+### Première Itération
+
+```bash
+$ ./assembler.sh fib.s -g
+gef➤ b loopFib
+gef➤ r
+```
+
+**Avant js:**
+```
+$rax   : 0x1
+$rbx   : 0x1
+$eflags: [zero CARRY parity ADJUST SIGN trap INTERRUPT direction overflow resume virtualx86 identification]
+
+─────────────────────────────────────── code:x86:64 ────
+     0x401009 <loopFib+0>      add    rax, rbx
+     0x40100c <loopFib+3>      xchg   rbx, rax
+     0x40100e <loopFib+5>      cmp    rbx, 0xa
+ →   0x401012 <loopFib+9>      js     0x401009 <loopFib>	TAKEN [Reason: S]
+```
+
+**Observation:**
+- SIGN flag = ON
+- `1 - 10 = -9` (négatif)
+- GEF affiche: **TAKEN [Reason: S]**
+
+---
+
+### Breakpoint Conditionnel
+
+**Syntaxe:**
+```bash
+b loopFib if $rbx > 10
+b *loopFib+9 if $rbx > 10
+b *0x401012 if $rbx > 10
+```
+
+**Trouver location:**
+```bash
+gef➤ disas loopFib
+```
+
+---
+
+### Application Breakpoint Conditionnel
+
+```bash
+gef➤ del 1
+gef➤ disas loopFib
+Dump of assembler code for function loopFib:
+..SNIP...
+0x0000000000401012 <+9>:	js     0x401009
+
+gef➤ b *loopFib+9 if $rbx > 10
+Breakpoint 2 at 0x401012
+gef➤ c
+```
+
+**Résultat:**
+```
+$rax   : 0x8
+$rbx   : 0xd      (13 en décimal)
+$eflags: [zero carry PARITY adjust sign trap INTERRUPT direction overflow resume virtualx86 identification]
+
+─────────────────────────────────────── code:x86:64 ────
+     0x401009 <loopFib+0>      add    rax, rbx
+     0x40100c <loopFib+3>      xchg   rbx, rax
+     0x40100e <loopFib+5>      cmp    rbx, 0xa
+ →   0x401012 <loopFib+9>      js     0x401009 <loopFib>	NOT taken [Reason: !(S)]
+```
+
+**Observation:**
+- rbx = 0xd (13)
+- `13 - 10 = 3` (positif)
+- Sign flag = OFF
+- GEF affiche: **NOT TAKEN [Reason: !(S)]**
+
+---
+
+## 🔄 Variations avec cmp
+
+### Exemple: jl au lieu de js
+
+```nasm
+cmp rbx, 10
+jl loopFib      ; Jump si rbx < 10
+```
+
+**Fonctionnement:**
+- rbx < 10 → `jl` saute ✅
+- rbx ≥ 10 → `jl` ne saute pas ❌
+
+**Résultat:** Même comportement que `js` dans ce cas
+
+---
+
+## 🔖 Alias d'Instructions
+
+### je et jne
+
+**Alias:**
+- `je` = `jz` (Jump if Equal = Jump if Zero)
+- `jne` = `jnz` (Jump if Not Equal = Jump if Not Zero)
+
+**Pourquoi?**
+```nasm
+cmp rax, rax    ; rax - rax = 0
+                ; Met Zero Flag à 1
+je label        ; Saute car Equal → Zero Flag = 1
+```
+
+---
+
+### jge et jnl
+
+**Alias:**
+- `jge` = `jnl` (Greater or Equal = Not Less)
+- Logique: `>=` est la même chose que `!<`
+
+---
+
+## 🎯 Comparaison des 3 Méthodes
+
+### Méthode 1: loop
+```nasm
+mov rcx, 10
+loop loopFib    ; Loop 10 fois
+```
+
+### Méthode 2: dec + jnz
+```nasm
+mov rcx, 10
+dec rcx
+jnz loopFib     ; Jump 10 fois
+```
+
+### Méthode 3: cmp + js
+```nasm
+cmp rbx, 10
+js loopFib      ; Jump tant que rbx < 10
+```
+
+**Question du cours:** Quelle méthode est la plus efficace?
+
+---
+
+## 📋 Quick Reference
+
+### Instructions Conditionnelles
+
+```nasm
+; Jump if Zero
+jz label
+
+; Jump if Not Zero
+jnz label
+
+; Jump if Sign (negative)
+js label
+
+; Jump if Not Sign (positive or zero)
+jns label
+
+; Jump if Greater
+jg label
+
+; Jump if Less
+jl label
+```
+
+---
+
+### Compare
+
+```nasm
+cmp destination, source    ; destination - source
+                          ; Met à jour RFLAGS
+                          ; NE modifie PAS les opérandes
+```
+
+---
+
+### GDB - Breakpoints Conditionnels
+
+```bash
+# Breakpoint si condition
+b label if $reg > value
+
+# Breakpoint à adresse spécifique si condition
+b *label+offset if $reg > value
+b *0x401012 if $rbx > 10
+```
+
+---
+
+## 🎓 Points Clés à Retenir
+
+### Instructions Conditionnelles
+1. **Jcc** = Jump if Condition Code
+2. Traité **seulement si** condition remplie
+3. Basé sur flags dans RFLAGS
+
+### Registre RFLAGS
+1. 64 bits de **flags** (pas de valeurs)
+2. Mis à jour par instructions arithmétiques
+3. Sub-registres: EFLAGS (32-bit), FLAGS (16-bit)
+
+### Flags Importants
+1. **ZF** (Zero Flag) - bit 6
+2. **SF** (Sign Flag) - bit 7
+3. **CF** (Carry Flag) - bit 0
+4. **PF** (Parity Flag) - bit 2
+
+### loop vs jnz
+1. `loop` = `dec rcx` + `jnz`
+2. `loop` existe pour efficacité
+3. Branchements conditionnels plus versatiles
+
+### cmp
+1. Compare sans modifier opérandes
+2. Syntaxe: `cmp dest, source` (dest - source)
+3. Destination DOIT être registre
+4. Plus efficace que `sub`
+
+---
+
+## 🚀 Progression Fibonacci
+
+### Code Actuel (3 versions possibles)
+
+**Version 1 - loop:**
+```nasm
+mov rcx, 10
+loopFib:
+    add rax, rbx
+    xchg rax, rbx
+    loop loopFib
+```
+
+**Version 2 - jnz:**
+```nasm
+mov rcx, 10
+loopFib:
+    add rax, rbx
+    xchg rax, rbx
+    dec rcx
+    jnz loopFib
+```
+
+**Version 3 - cmp + js:**
+```nasm
+loopFib:
+    add rax, rbx
+    xchg rax, rbx
+    cmp rbx, 10
+    js loopFib
+```
+
+**À vous de choisir la méthode que vous pensez être la meilleure!**
+
+---
+
+## 🔥 GEF - Lecture des Flags
+
+### Format
+
+```
+$eflags: [ZERO carry PARITY adjust sign trap INTERRUPT direction overflow RESUME]
+```
+
+**Règle:**
+- **MAJUSCULES** = Flag ON (1)
+- minuscules = Flag OFF (0)
+
+### Exemple
+
+```
+[ZERO carry PARITY] → ZF=1, CF=0, PF=1
+[zero CARRY parity] → ZF=0, CF=1, PF=0
+```
+
+---
+
+## 📊 Résumé Instructions de Contrôle
+
+```
+Instructions de Contrôle Vues:
+├─ loop → Boucle avec compteur rcx
+├─ jmp → Saut inconditionnel (toujours)
+├─ jnz → Saut si Not Zero
+├─ js → Saut si Sign (négatif)
+└─ cmp → Compare pour définir flags
+```
+
+**Prochaine étape:** Fonctions et syscalls pour I/O! 🚀
 
 
