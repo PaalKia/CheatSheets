@@ -2277,6 +2277,111 @@ On retrouve `INLANEFREIGHT\administrator` membre de `FREIGHTLOGISTICS\Administra
 - Domain Admin d’un enfant → **presque toujours parent compromise** via ExtraSids.  
 - La clé → bien comprendre la direction et le type du trust avant exploitation.
 
+---
 
+# SID Enumeration
 
+Énumération des Security Identifiers dans Active Directory.
+
+## Format SID
+
+```
+S-1-5-21-DOMAIN_IDENTIFIER-RID
+│ │ │  │                    └─ RID (identifiant relatif)
+│ │ │  └─ Domain Identifier (unique par domaine)
+│ │ └─ Sub-authority (5 = NT Authority)
+│ └─ Identifier Authority
+└─ Version
+```
+
+## Méthodes d'énumération
+
+### Via MSSQL
+
+```sql
+-- SID actuel
+SELECT SUSER_SID();
+
+-- SID d'un utilisateur/groupe
+SELECT SUSER_SID('DOMAIN\username');
+
+-- Convertir SID en nom
+SELECT SUSER_SNAME(0x01050000...);
+```
+
+### Via PowerShell
+
+```powershell
+# Domain SID
+(Get-ADDomain).DomainSID.Value
+
+# SID utilisateur
+Get-ADUser -Identity "username" | Select-Object Name, SID
+
+# SID groupe
+Get-ADGroup -Identity "groupname" | Select-Object Name, SID
+```
+
+### Via rpcclient
+
+```bash
+rpcclient -U "user%password" <DC_IP>
+
+# Domain SID
+rpcclient $> lsaquery
+
+# Énumérer utilisateurs
+rpcclient $> enumdomusers
+
+# Convertir RID en nom
+rpcclient $> lookupsids S-1-5-21-...-500
+```
+
+### Via ldapsearch
+
+```bash
+ldapsearch -x -H ldap://<DC_IP> -D "CN=user,DC=domain,DC=local" \
+  -w 'password' -b "DC=domain,DC=local" \
+  "(objectClass=user)" sAMAccountName objectSid
+```
+
+## Conversion Hex → SID
+
+### Python
+
+```python
+def hex_to_sid(hex_str):
+    if hex_str.startswith('0x'):
+        hex_str = hex_str[2:]
+    data = bytes.fromhex(hex_str)
+    revision = data[0]
+    sub_count = data[1]
+    authority = int.from_bytes(data[2:8], 'big')
+    
+    sid = f"S-{revision}-{authority}"
+    for i in range(sub_count):
+        offset = 8 + (i * 4)
+        sub = int.from_bytes(data[offset:offset+4], 'little')
+        sid += f"-{sub}"
+    return sid
+```
+
+## RIDs Well-Known
+
+| RID | Nom | Type |
+|-----|-----|------|
+| 500 | Administrator | User |
+| 501 | Guest | User |
+| 502 | krbtgt | User |
+| 512 | Domain Admins | Group |
+| 513 | Domain Users | Group |
+| 516 | Domain Controllers | Group |
+| 518 | Schema Admins | Group |
+| 519 | Enterprise Admins | Group |
+
+## Notes
+
+- Domain SID ne change jamais
+- RIDs < 1000 sont réservés
+- RID 500 existe toujours même si renommé
 
