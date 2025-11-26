@@ -4703,9 +4703,7 @@ loopFib:
 - ✅ Ajouté `cmp rbx, 10`
 - ✅ Utilisé `js loopFib` (jump si négatif)
 
----
-
-## 🔍 Debug GDB - cmp et js
+## Debug GDB - cmp et js
 
 ### Première Itération
 
@@ -4784,9 +4782,7 @@ $eflags: [zero carry PARITY adjust sign trap INTERRUPT direction overflow resume
 - Sign flag = OFF
 - GEF affiche: **NOT TAKEN [Reason: !(S)]**
 
----
-
-## 🔄 Variations avec cmp
+## Variations avec cmp
 
 ### Exemple: jl au lieu de js
 
@@ -4801,9 +4797,7 @@ jl loopFib      ; Jump si rbx < 10
 
 **Résultat:** Même comportement que `js` dans ce cas
 
----
-
-## 🔖 Alias d'Instructions
+## Alias d'Instructions
 
 ### je et jne
 
@@ -4818,17 +4812,13 @@ cmp rax, rax    ; rax - rax = 0
 je label        ; Saute car Equal → Zero Flag = 1
 ```
 
----
-
 ### jge et jnl
 
 **Alias:**
 - `jge` = `jnl` (Greater or Equal = Not Less)
 - Logique: `>=` est la même chose que `!<`
 
----
-
-## 🎯 Comparaison des 3 Méthodes
+## Comparaison des 3 Méthodes
 
 ### Méthode 1: loop
 ```nasm
@@ -4851,9 +4841,7 @@ js loopFib      ; Jump tant que rbx < 10
 
 **Question du cours:** Quelle méthode est la plus efficace?
 
----
-
-## 📋 Quick Reference
+## Quick Reference
 
 ### Instructions Conditionnelles
 
@@ -4877,8 +4865,6 @@ jg label
 jl label
 ```
 
----
-
 ### Compare
 
 ```nasm
@@ -4886,8 +4872,6 @@ cmp destination, source    ; destination - source
                           ; Met à jour RFLAGS
                           ; NE modifie PAS les opérandes
 ```
-
----
 
 ### GDB - Breakpoints Conditionnels
 
@@ -4899,41 +4883,7 @@ b label if $reg > value
 b *label+offset if $reg > value
 b *0x401012 if $rbx > 10
 ```
-
----
-
-## 🎓 Points Clés à Retenir
-
-### Instructions Conditionnelles
-1. **Jcc** = Jump if Condition Code
-2. Traité **seulement si** condition remplie
-3. Basé sur flags dans RFLAGS
-
-### Registre RFLAGS
-1. 64 bits de **flags** (pas de valeurs)
-2. Mis à jour par instructions arithmétiques
-3. Sub-registres: EFLAGS (32-bit), FLAGS (16-bit)
-
-### Flags Importants
-1. **ZF** (Zero Flag) - bit 6
-2. **SF** (Sign Flag) - bit 7
-3. **CF** (Carry Flag) - bit 0
-4. **PF** (Parity Flag) - bit 2
-
-### loop vs jnz
-1. `loop` = `dec rcx` + `jnz`
-2. `loop` existe pour efficacité
-3. Branchements conditionnels plus versatiles
-
-### cmp
-1. Compare sans modifier opérandes
-2. Syntaxe: `cmp dest, source` (dest - source)
-3. Destination DOIT être registre
-4. Plus efficace que `sub`
-
----
-
-## 🚀 Progression Fibonacci
+## Progression Fibonacci
 
 ### Code Actuel (3 versions possibles)
 
@@ -4965,11 +4915,7 @@ loopFib:
     js loopFib
 ```
 
-**À vous de choisir la méthode que vous pensez être la meilleure!**
-
----
-
-## 🔥 GEF - Lecture des Flags
+## GEF - Lecture des Flags
 
 ### Format
 
@@ -4989,18 +4935,4 @@ $eflags: [ZERO carry PARITY adjust sign trap INTERRUPT direction overflow RESUME
 ```
 
 ---
-
-## 📊 Résumé Instructions de Contrôle
-
-```
-Instructions de Contrôle Vues:
-├─ loop → Boucle avec compteur rcx
-├─ jmp → Saut inconditionnel (toujours)
-├─ jnz → Saut si Not Zero
-├─ js → Saut si Sign (négatif)
-└─ cmp → Compare pour définir flags
-```
-
-**Prochaine étape:** Fonctions et syscalls pour I/O! 🚀
-
 
