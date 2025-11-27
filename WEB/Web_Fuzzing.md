@@ -733,3 +733,9 @@ feroxbuster --url http://target.com -w wordlist.txt -s 200 -S 10240 -X "error"
 - **Combiner les filtres** : Status + size + words pour précision maximale
 - **TTFB (Time to First Byte)** : Identifier comportements anormaux avec `-mt`
 - **Regex filtering** : Puissant pour patterns complexes (wenum, feroxbuster)
+
+---
+
+# Validating Findings
+
+---
