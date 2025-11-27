@@ -738,4 +738,94 @@ feroxbuster --url http://target.com -w wordlist.txt -s 200 -S 10240 -X "error"
 
 # Validating Findings
 
----
+## Pourquoi Valider ?
+
+- **Confirmer** : Distinguer vulnérabilités réelles des faux positifs
+- **Évaluer l'impact** : Comprendre la sévérité
+- **Reproduire** : Répliquer de manière consistante
+- **Prouver** : Collecter des preuves (PoC)
+
+## Validation Manuelle avec curl
+
+### Vérifier un Directory Listing
+```bash
+# Vérifier si un répertoire est browsable
+curl http://target.com/backup/
+
+# Vérifier les headers uniquement (sans télécharger le contenu)
+curl -I http://target.com/backup/file.txt
+```
+
+### Analyser les Headers
+```bash
+# Exemple de headers à analyser
+curl -I http://target.com/backup/password.txt
+
+# Headers importants :
+# Content-Type : Type de fichier (text/plain, application/sql, etc.)
+# Content-Length : Taille (>0 = contenu présent, 0 = vide)
+# Last-Modified : Date de modification
+```
+
+**Exemple de réponse** :
+```http
+HTTP/1.1 200 OK
+Content-Type: text/plain;charset=utf-8
+Content-Length: 171
+```
+
+- `Content-Length: 171` → Fichier non vide (suspect si fichier sensible)
+- `Content-Length: 0` → Fichier vide (moins critique)
+
+## Workflow de Validation
+```bash
+# 1. Reproduire la requête du fuzzer
+curl http://target.com/discovered_path
+
+# 2. Analyser les headers (sans télécharger)
+curl -I http://target.com/discovered_file
+
+# 3. Si nécessaire, télécharger pour analyse
+curl http://target.com/file -o file_local
+
+# 4. Vérifier le contenu de manière responsable
+head -n 10 file_local  # Lire uniquement les premières lignes
+```
+
+## Fichiers Sensibles Communs
+
+| Type | Extensions | Risque |
+|------|-----------|--------|
+| **Database dumps** | `.sql`, `.db` | Credentials, données sensibles |
+| **Configuration** | `.config`, `.env`, `.ini` | API keys, secrets |
+| **Backups** | `.bak`, `.old`, `.backup` | Code source, configs |
+| **Source code** | `.php`, `.jsp`, `.asp` | Vulnérabilités, logique métier |
+
+## Proof of Concept (PoC) Responsable
+
+### Principes
+
+- **Ne pas nuire** : Éviter d'endommager le système
+- **Ne pas exfiltrer** : Ne pas télécharger de données sensibles
+- **Prouver l'existence** : Démontrer sans exploiter
+
+### Exemples
+```bash
+# SQLi : Obtenir la version (inoffensif)
+# Au lieu de : ' OR 1=1--
+# Utiliser : ' AND @@version--
+
+# Directory Listing : Vérifier headers uniquement
+curl -I http://target.com/backup/
+
+# File Access : Lire uniquement les premiers octets
+curl http://target.com/file -r 0-100
+```
+
+## Tips
+
+- **Headers first** : Toujours vérifier headers avant de télécharger
+- **Content-Length = 0** : Fichier vide, moins critique
+- **Content-Type** : Identifier le type exact de fichier
+- **Responsabilité** : Ne jamais accéder à des données sensibles réelles
+- **Documentation** : Capturer screenshots/outputs pour le rapport
