@@ -4936,3 +4936,1487 @@ $eflags: [ZERO carry PARITY adjust sign trap INTERRUPT direction overflow RESUME
 
 ---
 
+# Utilisation de la Stack
+
+## Rappel: Segments de RAM
+
+### 4 Segments de Mémoire
+
+```
+┌─────────────┐
+│    STACK    │ ← Données temporaires
+├─────────────┤
+│    HEAP     │
+├─────────────┤
+│    DATA     │ ← Variables
+├─────────────┤
+│    TEXT     │ ← Instructions Assembly
+└─────────────┘
+```
+
+**Vu jusqu'ici:**
+- **TEXT** segment → Instructions Assembly chargées ici
+- **DATA** segment → Variables de l'application
+- **STACK** segment → À étudier maintenant
+
+## La Stack
+
+### Définition
+
+**Stack** = Segment de mémoire alloué au programme pour:
+- Stocker des données
+- Les récupérer **temporairement**
+
+### Pointeurs de la Stack
+
+```
+┌─────────────────┐
+│  0xabcdef       │ ← Top of Stack ($rsp)
+├─────────────────┤
+│  ...            │
+├─────────────────┤
+│  0x1234567890   │ ← Bottom of Stack ($rbp)
+└─────────────────┘
+```
+
+| Pointeur | Nom | Pointe vers |
+|----------|-----|-------------|
+| **rsp** | Top Stack Pointer | **Sommet** de la stack |
+| **rbp** | Base Stack Pointer | **Base** de la stack |
+
+## Design LIFO
+
+### Last-In First-Out
+
+**LIFO** = Le dernier élément entré est le premier à sortir
+
+```
+Exemple:
+1. push rax (valeur: 5)
+   Stack: [5]
+
+2. push rbx (valeur: 10)
+   Stack: [10, 5]  ← 10 est au sommet
+
+3. pop rcx
+   rcx = 10
+   Stack: [5]
+
+4. pop rdx
+   rdx = 5
+   Stack: []
+```
+
+**Règle:** On ne peut pop que l'élément au **sommet** (rsp)
+
+## Instructions push et pop
+
+### Tableau des Instructions
+
+| Instruction | Description | Exemple |
+|-------------|-------------|---------|
+| **push** | Copie registre/adresse au sommet de la stack | `push rax` |
+| **pop** | Déplace élément du sommet vers registre/adresse | `pop rax` |
+
+### Instruction push
+
+**Syntaxe:**
+```nasm
+push source
+```
+
+**Comportement:**
+1. Copie la valeur de `source`
+2. Place la copie au **sommet** de la stack (rsp)
+3. Source reste **inchangée** (c'est une copie)
+
+**Exemple:**
+```nasm
+push rax    ; Copie rax au sommet de la stack
+```
+### Instruction pop
+
+**Syntaxe:**
+```nasm
+pop destination
+```
+
+**Comportement:**
+1. Prend la valeur au **sommet** de la stack (rsp)
+2. La déplace vers `destination`
+3. **Supprime** la valeur de la stack
+
+**Exemple:**
+```nasm
+pop rax     ; Déplace valeur du sommet vers rax
+```
+
+## Exercice Interactif (Représentation)
+
+### État Initial
+
+```
+Stack:
+┌─────────────────┐
+│  0xabcdef       │ ← Top ($rsp)
+├─────────────────┤
+│  0x1234567890   │ ← Bottom ($rbp)
+└─────────────────┘
+
+rax: [vide]
+```
+
+### Après push depuis rax (valeur: 0x42)
+
+```
+Stack:
+┌─────────────────┐
+│  0x42           │ ← Top ($rsp) - NOUVEAU
+├─────────────────┤
+│  0xabcdef       │
+├─────────────────┤
+│  0x1234567890   │ ← Bottom ($rbp)
+└─────────────────┘
+
+rax: 0x42 (inchangé)
+```
+
+### Après pop vers rax
+
+```
+Stack:
+┌─────────────────┐
+│  0xabcdef       │ ← Top ($rsp)
+├─────────────────┤
+│  0x1234567890   │ ← Bottom ($rbp)
+└─────────────────┘
+
+rax: 0x42 (restauré)
+```
+
+## Usage avec Fonctions/Syscalls
+
+### Problème
+
+**Fonctions et syscalls utilisent les registres pour leur traitement**
+
+```
+Avant syscall:  rax = 5 (notre valeur importante)
+Appel syscall:  rax est utilisé par le syscall
+Après syscall:  rax = ??? (valeur changée/perdue!)
+```
+
+### Solution: push/pop
+
+```nasm
+; Sauvegarder
+push rax        ; Stack: [5]
+
+; Exécuter syscall
+; ... syscall code ...
+
+; Restaurer
+pop rax         ; rax = 5 (valeur restaurée!)
+```
+
+**Résultat:** On peut exécuter le syscall ET garder la valeur de rax
+
+## Application au Code Fibonacci
+
+### Code Actuel
+
+```nasm
+global  _start
+
+section .text
+_start:
+    xor rax, rax    ; initialize rax to 0
+    xor rbx, rbx    ; initialize rbx to 0
+    inc rbx         ; increment rbx to 1
+
+loopFib:
+    add rax, rbx    ; get the next number
+    xchg rax, rbx   ; swap values
+    cmp rbx, 10     ; do rbx - 10
+    js loopFib      ; jump if result is <0
+```
+
+### Ajout push/pop pour Syscall
+
+**Scénario:** Appeler fonction/syscall avant la boucle
+
+```nasm
+global  _start
+
+section .text
+_start:
+    xor rax, rax    ; initialize rax to 0
+    xor rbx, rbx    ; initialize rbx to 0
+    inc rbx         ; increment rbx to 1
+    
+    push rax        ; push registers to stack
+    push rbx
+    ; call function
+    pop rbx         ; restore registers from stack
+    pop rax
+    
+loopFib:
+    add rax, rbx
+    xchg rax, rbx
+    cmp rbx, 10
+    js loopFib
+```
+
+**Registres utilisés:** rax et rbx → Seulement ces deux à sauvegarder
+
+## Ordre CRITIQUE: Ordre Inverse
+
+### Règle Fondamentale
+
+> **Pop dans l'ordre INVERSE du push!**
+
+**Pourquoi?** Design LIFO de la stack
+
+### Exemple Correct
+
+```nasm
+push rax        ; Stack: [rax_value]
+push rbx        ; Stack: [rbx_value, rax_value]
+                ;         ↑ sommet
+
+; ... code ...
+
+pop rbx         ; rbx restauré, Stack: [rax_value]
+pop rax         ; rax restauré, Stack: []
+```
+
+### Exemple INCORRECT ❌
+
+```nasm
+push rax        ; Stack: [rax_value]
+push rbx        ; Stack: [rbx_value, rax_value]
+
+; ... code ...
+
+pop rax         ; ❌ ERREUR: rax = rbx_value!
+pop rbx         ; ❌ ERREUR: rbx = rax_value!
+```
+
+**Résultat:** Valeurs échangées incorrectement!
+
+## Debug avec GDB
+
+### Setup
+
+```bash
+$ ./assembler.sh fib.s -g
+gef➤ b _start
+gef➤ r
+gef➤ si    # 3 fois jusqu'à push
+```
+
+### État Avant push
+
+```
+───────────────────────────── registers ────
+$rax   : 0x0
+$rbx   : 0x1
+
+───────────────────────────────── stack ────
+0x00007fffffffe410│+0x0000: 0x0000000000000001	 ← $rsp
+0x00007fffffffe418│+0x0008: 0x0000000000000000
+0x00007fffffffe420│+0x0010: 0x0000000000000000
+0x00007fffffffe428│+0x0018: 0x0000000000000000
+
+─────────────────────────────── code:x86:64 ────
+ →   0x40100e <_start+9>      push   rax
+     0x40100f <_start+10>      push   rbx
+     0x401010 <_start+11>      pop    rbx
+     0x401011 <_start+12>      pop    rax
+```
+
+**État:**
+- rax = 0x0
+- rbx = 0x1
+- Stack avec valeurs existantes
+  
+### Après push rax
+
+```bash
+gef➤ si
+```
+
+```
+───────────────────────────── registers ────
+$rax   : 0x0          ← Inchangé!
+$rbx   : 0x1
+
+───────────────────────────────── stack ────
+0x00007fffffffe408│+0x0000: 0x0000000000000000	 ← $rsp (nouveau sommet)
+0x00007fffffffe410│+0x0008: 0x0000000000000001
+0x00007fffffffe418│+0x0010: 0x0000000000000000
+
+─────────────────────────────── code:x86:64 ────
+     0x40100e <loopFib+9>      push   rax
+ →   0x40100f <_start+10>      push   rbx
+     0x401010 <_start+11>      pop    rbx
+```
+
+**Observation:**
+- rax toujours = 0x0 (push = copie, pas déplacement)
+- Stack sommet = 0x0 (valeur de rax)
+- $rsp a changé (pointeur déplacé)
+
+### Après push rbx
+
+```bash
+gef➤ si
+```
+
+```
+───────────────────────────── registers ────
+$rax   : 0x0
+$rbx   : 0x1          ← Inchangé!
+
+───────────────────────────────── stack ────
+0x00007fffffffe400│+0x0000: 0x0000000000000001	 ← $rsp (rbx au sommet)
+0x00007fffffffe408│+0x0008: 0x0000000000000000  ← rax en dessous
+0x00007fffffffe410│+0x0010: 0x0000000000000001
+
+─────────────────────────────── code:x86:64 ────
+     0x40100e <_start+9>      push   rax
+     0x40100f <_start+10>      push   rbx
+ →   0x401010 <_start+11>      pop    rbx
+     0x401011 <_start+12>      pop    rax
+```
+
+**Stack après 2 push:**
+```
+0x00007fffffffe400│+0x0000: 0x0000000000000001  ← $rsp (rbx = 0x1)
+0x00007fffffffe408│+0x0008: 0x0000000000000000  (rax = 0x0)
+```
+
+**Observations:**
+- Sommet = dernier push (rbx = 0x1) ✅
+- En dessous = push précédent (rax = 0x0) ✅
+- Registres inchangés (push = copie) ✅
+- Ordre LIFO respecté ✅
+
+### Après pop rbx
+
+```bash
+gef➤ si
+```
+
+```
+───────────────────────────── registers ────
+$rax   : 0x0
+$rbx   : 0x1          ← Restauré!
+
+───────────────────────────────── stack ────
+0x00007fffffffe408│+0x0000: 0x0000000000000000	 ← $rsp (sommet déplacé)
+0x00007fffffffe410│+0x0008: 0x0000000000000001
+0x00007fffffffe418│+0x0010: 0x0000000000000000
+
+─────────────────────────────── code:x86:64 ────
+     0x40100e <_start+9>      push   rax
+     0x40100f <_start+10>      push   rbx
+     0x401010 <_start+11>      pop    rbx
+ →   0x401011 <_start+12>      pop    rax
+```
+
+**Observation:**
+- rbx = 0x1 (valeur restaurée)
+- Valeur supprimée du sommet de la stack
+- $rsp déplacé vers le bas
+
+### Après pop rax
+
+```bash
+gef➤ si
+```
+
+```
+───────────────────────────── registers ────
+$rax   : 0x0          ← Restauré!
+$rbx   : 0x1
+
+───────────────────────────────── stack ────
+0x00007fffffffe410│+0x0000: 0x0000000000000001	 ← $rsp
+0x00007fffffffe418│+0x0008: 0x0000000000000000
+0x00007fffffffe420│+0x0010: 0x0000000000000000
+
+─────────────────────────────── code:x86:64 ────
+     0x40100f <_start+9>      push   rax
+     0x40100f <_start+10>      push   rbx
+     0x401010 <_start+11>      pop    rbx
+     0x401011 <_start+12>      pop    rax
+ →   0x401011 <loopFib+0>      add rax, rbx
+```
+
+**Observations Finales:**
+- Stack identique à l'état initial ✅
+- rax = 0x0 (restauré correctement) ✅
+- rbx = 0x1 (restauré correctement) ✅
+- Valeurs pas changées car pas modifiées entre push/pop
+
+## Quick Reference
+
+### Instructions
+
+```nasm
+; Sauvegarder dans la stack
+push rax        ; Copie rax au sommet
+push rbx        ; Copie rbx au sommet
+
+; Restaurer depuis la stack
+pop rbx         ; Déplace sommet vers rbx (ordre inverse!)
+pop rax         ; Déplace sommet vers rax
+```
+
+---
+
+### Pattern Sauvegarde/Restauration
+
+```nasm
+; Sauvegarder tous registres utilisés
+push rax
+push rbx
+push rcx
+
+; Appeler fonction/syscall
+; ... code ...
+
+; Restaurer dans ordre INVERSE
+pop rcx
+pop rbx
+pop rax
+```
+
+---
+
+# Syscalls - Cheat Sheet
+
+## 🖥️ Pourquoi les Syscalls?
+
+### Sans Syscalls
+
+**Pour afficher un caractère à l'écran:**
+```
+1. Parler à la Video Memory
+2. Parler à la Video I/O
+3. Résoudre l'encodage requis
+4. Envoyer l'input à afficher
+5. Attendre confirmation d'affichage
+```
+
+**Problème:** Code Assembly **beaucoup trop long**
+
+---
+
+### Avec Syscalls
+
+**Définition:**
+- Fonction globalement disponible
+- Écrite en C
+- Fournie par le Kernel du système d'exploitation
+
+**Avantage:**
+- Prend arguments dans registres
+- Exécute la fonction avec ces arguments
+- Simplifie énormément le code
+
+---
+
+## 📋 Liste des Syscalls Linux
+
+### Fichier System: unistd_64.h
+
+```bash
+cat /usr/include/x86_64-linux-gnu/asm/unistd_64.h
+```
+
+**Output:**
+```c
+#ifndef _ASM_X86_UNISTD_64_H
+#define _ASM_X86_UNISTD_64_H 1
+
+#define __NR_read 0
+#define __NR_write 1
+#define __NR_open 2
+#define __NR_close 3
+#define __NR_stat 4
+#define __NR_fstat 5
+```
+
+**Fonction:** Définit le numéro de syscall pour chaque syscall
+
+> **Note:** Pour processeurs 32-bit x86, utiliser `unistd_32.h`
+
+---
+
+## Syscall write
+
+### Arguments de la Fonction
+
+**Commande pour trouver les arguments:**
+```bash
+man -s 2 write
+```
+
+**Output:**
+```c
+ssize_t write(int fd, const void *buf, size_t count);
+```
+
+**3 Arguments:**
+1. `fd` (File Descriptor) - Où afficher (1 pour stdout)
+2. `*buf` (Pointer) - Adresse du string à afficher
+3. `count` (Size) - Longueur à afficher
+
+> **Tip:** Flag `-s 2` spécifie les man pages syscall. Voir `man man` pour les sections
+
+### Ressources Supplémentaires
+
+**En ligne de commande:**
+- `man -s 2 syscall_name`
+
+**En ligne:**
+- Tables de syscalls disponibles (ex: table mentionnée dans le cours)
+- Linux source code sur Github
+
+## Calling Convention
+
+### 4 Étapes pour Appeler un Syscall
+
+```
+1. Sauvegarder registres dans stack
+2. Mettre numéro syscall dans rax
+3. Mettre arguments dans registres
+4. Utiliser instruction syscall
+```
+
+> **Note cours:** "We usually should save any registers we use to the stack before any function call or syscall. However, as we are running this syscall at the beginning of our program before using any registers, we don't have any values in the registers, so we should not worry about saving them."
+
+### Tableau des Registres pour Arguments
+
+| Description | 64-bit | 8-bit |
+|-------------|--------|-------|
+| Syscall Number/Return value | **rax** | al |
+| Callee Saved | rbx | bl |
+| 1st arg | **rdi** | dil |
+| 2nd arg | **rsi** | sil |
+| 3rd arg | **rdx** | dl |
+| 4th arg | **rcx** | cl |
+| 5th arg | **r8** | r8b |
+| 6th arg | **r9** | r9b |
+
+**Notes:**
+- Registre pour chacun des **6 premiers arguments**
+- Arguments supplémentaires → stack (peu de syscalls en utilisent > 6)
+- **rax** utilisé aussi pour stocker la **valeur de retour** du syscall
+
+## Application: Afficher Message Intro
+
+### Objectif
+
+Afficher "Fibonacci Sequence:\n" au début du programme
+
+### Étape 1: Numéro Syscall
+
+```nasm
+mov rax, 1       ; write syscall = numéro 1
+```
+
+### Étape 2: Variable Message
+
+**Problème:** String trop long pour registre (max 8 bytes = 8 caractères ASCII)
+
+**Solution:** Créer variable dans section .data
+
+```nasm
+section .data
+    message db "Fibonacci Sequence:", 0x0a
+```
+
+**Notes:**
+- `0x0a` = caractère nouvelle ligne
+- `message` = pointeur vers string en mémoire
+
+> **Tip cours:** "If we ever needed to create a pointer to a value stored in a register, we can simply push it to the stack, and then use the rsp pointer to point to it."
+
+### Étape 3: Arguments
+
+**write(fd, pointer, length)**
+
+```nasm
+mov rdi, 1       ; 1st arg: fd 1 for stdout
+mov rsi, message ; 2nd arg: pointer to message
+mov rdx, 20      ; 3rd arg: print length of 20 bytes
+```
+
+**Mapping:**
+- `rdi` → 1 (stdout)
+- `rsi` → 'Fibonacci Sequence:\n' (pointeur)
+- `rdx` → 20 (longueur du string)
+
+---
+
+### Étape 4: Appel Syscall
+
+```nasm
+syscall          ; call write syscall
+```
+
+### Code Complet Fibonacci avec write
+
+```nasm
+global  _start
+
+section .data
+    message db "Fibonacci Sequence:", 0x0a
+
+section .text
+_start:
+    mov rax, 1       ; rax: syscall number 1
+    mov rdi, 1       ; rdi: fd 1 for stdout
+    mov rsi, message ; rsi: pointer to message
+    mov rdx, 20      ; rdx: print length of 20 bytes
+    syscall          ; call write syscall to the intro message
+    
+    xor rax, rax     ; initialize rax to 0
+    xor rbx, rbx     ; initialize rbx to 0
+    inc rbx          ; increment rbx to 1
+
+loopFib:
+    add rax, rbx     ; get the next number
+    xchg rax, rbx    ; swap values
+    cmp rbx, 10      ; do rbx - 10
+    js loopFib       ; jump if result is <0
+```
+
+## Test et Debug
+
+### Exécution
+
+```bash
+$ ./assembler.sh fib.s
+
+Fibonacci Sequence:
+[1]    107348 segmentation fault  ./fib
+```
+
+**Observation:**
+- ✅ String affichée correctement
+- ❌ Segmentation fault (pas encore d'exit syscall)
+
+### Debug avec GDB
+
+```bash
+$ gdb -q ./fib
+gef➤ disas _start
+...SNIP...
+0x0000000000401011 <+17>:	syscall 
+
+gef➤ b *_start+17
+Breakpoint 1 at 0x401011
+
+gef➤ r
+```
+
+**Avant syscall:**
+```
+───────────────────────────── registers ────
+$rax   : 0x1
+$rbx   : 0x0
+$rcx   : 0x0
+$rdx   : 0x14              (20 en décimal)
+$rsp   : 0x00007fffffffe410  →  0x0000000000000001
+$rbp   : 0x0
+$rsi   : 0x0000000000402000  →  "Fibonacci Sequence:\n"
+$rdi   : 0x1
+```
+
+**Après si:**
+```bash
+gef➤ si
+
+Fibonacci Sequence:
+```
+
+**Observations:**
+- ✅ Arguments correctement placés dans registres
+- ✅ Pointeur vers message chargé dans rsi
+- ✅ Syscall exécuté avec succès
+
+## Syscall exit
+
+### Problème Actuel
+
+```bash
+$ ./fib
+Fibonacci Sequence:
+[1]    107348 segmentation fault  ./fib
+```
+
+**Raison:** Programme termine abruptement sans procédure d'exit Linux appropriée
+
+### Trouver le Syscall exit
+
+```bash
+$ grep exit /usr/include/x86_64-linux-gnu/asm/unistd_64.h
+
+#define __NR_exit 60
+#define __NR_exit_group 231
+```
+
+**On utilise le premier:** `__NR_exit` = numéro **60**
+
+### Arguments de exit
+
+```bash
+$ man -s 2 exit
+
+...SNIP...
+void _exit(int status);
+```
+
+**1 Argument:**
+- `status` (int) - Code de sortie
+  - **0** = pas d'erreurs
+  - **1** (ou autre) = erreur
+
+**Notre cas:** Tout va bien → exit code = **0**
+
+
+### Code exit Syscall
+
+```nasm
+mov rax, 60      ; exit syscall number
+mov rdi, 0       ; exit code 0
+syscall
+```
+
+### Code Final avec exit
+
+```nasm
+global  _start
+
+section .data
+    message db "Fibonacci Sequence:", 0x0a
+
+section .text
+_start:
+    mov rax, 1       ; rax: syscall number 1
+    mov rdi, 1       ; rdi: fd 1 for stdout
+    mov rsi, message ; rsi: pointer to message
+    mov rdx, 20      ; rdx: print length of 20 bytes
+    syscall          ; call write syscall to the intro message
+    
+    xor rax, rax     ; initialize rax to 0
+    xor rbx, rbx     ; initialize rbx to 0
+    inc rbx          ; increment rbx to 1
+
+loopFib:
+    add rax, rbx     ; get the next number
+    xchg rax, rbx    ; swap values
+    cmp rbx, 10      ; do rbx - 10
+    js loopFib       ; jump if result is <0
+    
+    mov rax, 60      ; exit syscall
+    mov rdi, 0       ; exit code 0
+    syscall
+```
+
+## Test Final
+
+### Exécution
+
+```bash
+$ ./assembler.sh fib.s
+
+Fibonacci Sequence:
+```
+
+**Observation:** ✅ Plus de segmentation fault!
+
+### Vérifier Exit Code
+
+```bash
+$ echo $?
+
+0
+```
+
+**Résultat:** Exit code = 0 comme spécifié ✅
+
+## Quick Reference
+
+### Syscall write
+
+```nasm
+mov rax, 1       ; syscall number
+mov rdi, 1       ; fd (1 = stdout)
+mov rsi, pointer ; adresse du string
+mov rdx, length  ; longueur
+syscall
+```
+
+### Syscall exit
+
+```nasm
+mov rax, 60      ; syscall number
+mov rdi, 0       ; exit code (0 = success)
+syscall
+```
+
+
+
+### Trouver Syscalls
+
+```bash
+# Liste des syscalls
+cat /usr/include/x86_64-linux-gnu/asm/unistd_64.h
+
+# Arguments d'un syscall
+man -s 2 syscall_name
+
+# Chercher syscall spécifique
+grep syscall_name /usr/include/x86_64-linux-gnu/asm/unistd_64.h
+```
+
+## Calling Convention - Résumé
+
+### Étapes
+
+```
+1. Sauvegarder registres (si nécessaire)
+   push rax
+   push rbx
+
+2. Numéro syscall dans rax
+   mov rax, syscall_number
+
+3. Arguments dans registres
+   mov rdi, arg1
+   mov rsi, arg2
+   mov rdx, arg3
+
+4. Appeler syscall
+   syscall
+
+5. Restaurer registres (si sauvegardés)
+   pop rbx
+   pop rax
+```
+
+---
+
+### Arguments Mapping
+
+```
+rax = Syscall number
+rdi = 1st argument
+rsi = 2nd argument
+rdx = 3rd argument
+rcx = 4th argument
+r8  = 5th argument
+r9  = 6th argument
+Stack = Additional arguments
+```
+
+**Retour:** `rax` = valeur de retour du syscall
+
+---
+
+
+# Procedures
+
+## Refactorisation du Code
+
+### Pourquoi?
+
+**Code qui grandit en complexité** → Besoin de:
+- Utilisation plus efficace des instructions
+- Code plus facile à lire et comprendre
+
+**Solution:** Fonctions et procédures
+
+## Procédures vs Fonctions
+
+### Procédures (Procedures)
+
+**Caractéristiques:**
+- Plus simples et directes
+- **Pas de calling procedure** pour les appeler
+- **Pas de passage d'arguments**
+- Principalement pour **refactorisation de code**
+
+### Fonctions (Functions)
+
+**Caractéristiques:**
+- Requièrent calling procedure
+- Passage d'arguments
+- Plus complexes (section suivante du cours)
+
+## Définition d'une Procédure
+
+### Concept
+
+**Procédure** (aussi appelée subroutine) = Ensemble d'instructions:
+- À exécuter à des points spécifiques du programme
+- Écrites **une seule fois**
+- Utilisables **plusieurs fois**
+- Permet de diviser code complexe en segments plus simples
+
+### Analyse: 4 Parties Distinctes
+
+```
+1. Printing the intro message
+2. Setting initial Fibonacci values to 0 and 1
+3. Using a loop to calculate the following Fibonacci number
+4. Exiting the program
+```
+
+**Observation:**
+- Loop déjà sous un label (loopFib)
+- 3 autres parties → Peuvent devenir procédures
+
+
+## Étape 1: Ajouter Labels
+
+### Code avec Labels
+
+```nasm
+global  _start
+
+section .data
+    message db "Fibonacci Sequence:", 0x0a
+
+section .text
+_start:
+
+printMessage:
+    mov rax, 1       ; rax: syscall number 1
+    mov rdi, 1       ; rdi: fd 1 for stdout
+    mov rsi, message ; rsi: pointer to message
+    mov rdx, 20      ; rdx: print length of 20 bytes
+    syscall          ; call write syscall to the intro message
+
+initFib:
+    xor rax, rax     ; initialize rax to 0
+    xor rbx, rbx     ; initialize rbx to 0
+    inc rbx          ; increment rbx to 1
+
+loopFib:
+    add rax, rbx     ; get the next number
+    xchg rax, rbx    ; swap values
+    cmp rbx, 10      ; do rbx - 10
+    js loopFib       ; jump if result is <0
+
+Exit:
+    mov rax, 60
+    mov rdi, 0
+    syscall
+```
+
+**Résultat:**
+- Code déjà plus lisible
+- Mais **pas plus efficace** (équivalent à des commentaires)
+- Besoin d'utiliser `call` pour vraie efficacité
+
+## Instructions call et ret
+
+### Tableau des Instructions
+
+| Instruction | Description | Exemple |
+|-------------|-------------|---------|
+| **call** | Push le prochain instruction pointer (rip) dans la stack, puis saute à la procédure spécifiée | `call printMessage` |
+| **ret** | Pop l'adresse au sommet (rsp) vers rip, puis saute à cette adresse | `ret` |
+
+### Instruction call
+
+**Syntaxe:**
+```nasm
+call procedure_label
+```
+
+**Comportement:**
+1. **Push** rip (prochaine instruction) dans la stack
+2. **Jump** à la procédure spécifiée
+3. Exécute les instructions de la procédure
+
+**Exemple:**
+```nasm
+call printMessage    ; Saute à printMessage
+```
+
+### Instruction ret
+
+**Syntaxe:**
+```nasm
+ret
+```
+
+**Comportement:**
+1. **Pop** l'adresse au sommet de la stack (rsp)
+2. La place dans rip
+3. Continue l'exécution depuis rip restauré
+
+**Effet:** Retourne au point d'où on a appelé la procédure
+
+---
+
+### Flux d'Exécution
+
+```
+Programme Principal:
+    call procedure1     ← 1. Sauvegarde rip (adresse ligne suivante)
+    instruction X       ← 4. Retour ici après ret
+    ...
+
+procedure1:
+    instruction A       ← 2. Exécute procédure
+    instruction B
+    ret                 ← 3. Restaure rip et retourne
+```
+
+### Cas Particulier: Exit
+
+```nasm
+Exit:
+    mov rax, 60
+    syscall
+    ret               ← Si on faisait ça...
+
+printMessage:         ← ... on retournerait ici!
+    mov rax, 1
+```
+
+**Problème:** Recommencerait printMessage → Boucle infinie
+
+**Solution:** Exit sans ret → Programme termine vraiment
+
+
+## 📋 Quick Reference
+
+### Définir une Procédure
+
+```nasm
+procedure_name:
+    ; instructions
+    ret             ; Retourner au point d'appel
+```
+
+### Appeler une Procédure
+
+```nasm
+call procedure_name    ; Saute et sauvegarde rip
+```
+
+## ROP Mention
+
+> "The ret instruction plays an essential role in Return-Oriented Programming (ROP), an exploitation technique usually used with Binary Exploitation."
+
+**ret = Crucial** pour techniques d'exploitation avancées
+
+**À retenir:** ret pas juste pour retourner, utilisé aussi en exploitation
+
+---
+
+# Functions
+
+## Functions vs Procedures
+
+### Procédures (vu précédemment)
+- Simples
+- Ne nécessitent pas de calling convention complexe
+- Appelées directement avec `call`
+
+### Functions
+- **Plus complexes** que les procédures
+- Utilisent pleinement la stack et tous les registres
+- Nécessitent une **Calling Convention** appropriée
+- Ne peuvent pas être appelées simplement comme procédures
+
+## Functions Calling Convention
+
+### 4 Points Avant d'Appeler une Fonction
+
+```
+Point de vue du CALLER (qui appelle):
+
+1. Save Registers on the stack (Caller Saved)
+2. Pass Function Arguments (comme syscalls)
+3. Fix Stack Alignment
+4. Get Function's Return Value (dans rax)
+```
+
+### Similitudes avec Syscalls
+
+**Similaire:**
+- Passage d'arguments dans registres
+
+**Différences:**
+- Syscall: numéro dans rax + `syscall`
+- Function: appel direct avec `call function`
+- Syscall: **pas besoin** de Stack Alignment
+- Function: Stack Alignment **requis**
+
+## Writing Functions
+
+### 4 Points pour Écrire une Fonction
+
+```
+Point de vue du CALLEE (qui reçoit):
+
+1. Saving Callee Saved registers (rbx et rbp)
+2. Get arguments from registers
+3. Align the Stack
+4. Return value in rax
+```
+
+**Prologue et Epilogue:**
+- Ces points faits au **début** = prologue
+- Ces points faits à la **fin** = epilogue
+- Permettent d'appeler fonctions sans se soucier de l'état actuel de la stack/registres
+
+## Utiliser Fonctions Externes
+
+### Problème à Résoudre
+
+**Objectif:** Afficher le nombre Fibonacci actuel à chaque itération
+
+**Problème write syscall:**
+- N'accepte que caractères ASCII
+- Conversion nombre → ASCII compliquée
+
+**Solution:** Utiliser fonctions externes
+
+### Bibliothèque libc
+
+**libc** = Bibliothèque de fonctions pour programmes C
+- Fournit nombreuses fonctionnalités
+- Pas besoin de tout réécrire from scratch
+- **printf** = fonction qui fait conversion automatiquement
+
+**printf:**
+- Accepte format d'affichage
+- On passe le nombre Fibonacci
+- On lui dit de l'afficher comme entier
+- Il fait la conversion automatiquement
+
+## Importer Fonctions libc
+
+### Instruction extern
+
+```nasm
+global  _start
+extern  printf
+```
+
+**Effet:**
+- Importe fonction printf
+- Permet de l'appeler dans le code
+- Nécessaire avant utilisation
+
+## Étape 1: Sauvegarder Registres
+
+### Procédure printFib
+
+```nasm
+printFib:
+    push rax        ; push registers to stack
+    push rbx
+    ; function call
+    pop rbx         ; restore registers from stack
+    pop rax
+    ret
+```
+
+**Registres utilisés:** rax et rbx → Les deux à sauvegarder
+
+## Étape 2: Arguments de Fonction
+
+### Trouver les Arguments
+
+**Commande:**
+```bash
+man -s 3 printf
+```
+
+> **Note:** `-s 3` pour manual des library functions (voir `man man`)
+
+**Output:**
+```c
+int printf(const char *format, ...);
+```
+
+**Arguments:**
+1. Pointeur vers format d'affichage (avec `*`)
+2. String(s) à afficher
+
+### Créer Variable de Format
+
+**Variable outFormat:**
+```nasm
+section .data
+    message db "Fibonacci Sequence:", 0x0a
+    outFormat db  "%d", 0x0a, 0x00
+```
+
+**Détails:**
+- `%d` = format pour afficher un entier (voir man page printf)
+- `0x0a` = nouvelle ligne
+- `0x00` = caractère null (terminateur de string dans printf)
+
+> **Note du cours:** "We ended the format with a null character 0x00, as this is the string terminator in printf, and we must terminate any string with it."
+
+### Placer Arguments dans Registres
+
+```nasm
+printFib:
+    push rax            ; push registers to stack
+    push rbx
+    mov rdi, outFormat  ; set 1st argument (Print Format)
+    mov rsi, rbx        ; set 2nd argument (Fib Number)
+    pop rbx             ; restore registers from stack
+    pop rax
+    ret
+```
+
+**Mapping:**
+- `rdi` = 1er argument (pointeur vers outFormat)
+- `rsi` = 2ème argument (nombre Fibonacci dans rbx)
+- printf remplacera `%d` par la valeur de rbx
+
+
+## Étape 3: Stack Alignment
+
+### Règle du 16-byte Boundary
+
+**Exigence:**
+> **Top Stack Pointer (rsp)** doit être aligné par boundary de **16-bytes** depuis la fonction _start
+
+**Signification:**
+- Au moins **16 bytes** (ou multiple de 16) poussés dans la stack
+- Avant de faire un `call` à une fonction
+
+**Raison:**
+- Performance efficace du processeur
+- Certaines fonctions libc crashent si non respecté
+
+### Calcul du Boundary
+
+**État dans printFib après 2 push:**
+```
+───────────────────────────── stack ────
+0x00007fffffffe3a0│+0x0000: 0x0000000000000001	 ← $rsp
+0x00007fffffffe3a8│+0x0008: 0x0000000000000000
+0x00007fffffffe3b0│+0x0010: 0x00000000004010ad  →  <loopFib+5>
+0x00007fffffffe3b8│+0x0018: 0x0000000000401044  →  <_start+20>
+```
+
+**Analyse:**
+- 4 × 8-bytes = **32 bytes total**
+- 32 bytes = multiple de 16 ✅
+
+**Pourquoi 4 × 8-bytes?**
+1. `call loopFib` → +8 bytes (adresse retour)
+2. `call printFib` → +8 bytes (adresse retour)
+3. `push rax` → +8 bytes
+4. `push rbx` → +8 bytes
+Total: 32 bytes (multiple de 16) ✅
+
+### Ajuster si Nécessaire
+
+**Si boundary n'est pas multiple de 16:**
+```nasm
+sub rsp, 16     ; Ajouter 16 bytes au sommet
+call function
+add rsp, 16     ; Retirer les 16 bytes
+```
+
+**Exemple:** Si 8 bytes poussés, soustraire 8 de rsp pour atteindre 16
+
+### Règle Simple
+
+> **Note du cours:** "The critical thing to remember is that we should have 16-bytes (or a multiple of 16) on top of the stack before making a call."
+
+**Comment compter:**
+- Compter instructions `push` (non-poppées)
+- Compter instructions `call` (non-retournées)
+- Chaque = 8 bytes
+- Total doit être multiple de 16
+
+## Étape 4: Appel de Fonction
+
+### Code Complet printFib
+
+```nasm
+printFib:
+    push rax            ; push registers to stack
+    push rbx
+    mov rdi, outFormat  ; set 1st argument (Print Format)
+    mov rsi, rbx        ; set 2nd argument (Fib Number)
+    call printf         ; printf(outFormat, rbx)
+    pop rbx             ; restore registers from stack
+    pop rax
+    ret
+```
+
+**Résultat:** printf affiche le nombre Fibonacci actuel dans le format spécifié
+
+## Intégration dans loopFib
+
+### Ajouter printFib au Début de la Boucle
+
+```nasm
+loopFib:
+    call printFib   ; print current Fib number
+    add rax, rbx    ; get the next number
+    xchg rax, rbx   ; swap values
+    cmp rbx, 10     ; do rbx - 10
+    js loopFib      ; jump if result is <0
+    ret
+```
+
+**Effet:** Affiche le nombre Fibonacci actuel à chaque itération
+
+## Dynamic Linker
+
+### Assemblage et Linkage
+
+**Commande complète:**
+```bash
+nasm -f elf64 fib.s && \
+ld fib.o -o fib -lc --dynamic-linker /lib64/ld-linux-x86-64.so.2 && \
+./fib
+```
+
+**Flags ld importants:**
+- `-lc` → Lie avec bibliothèque libc
+- `--dynamic-linker /lib64/ld-linux-x86-64.so.2` → Linker dynamique
+
+**Pourquoi?**
+- ld doit savoir comment récupérer la fonction printf importée
+- Sans ces flags, erreur de linkage
+
+
+### Output
+
+```
+Fibonacci Sequence:
+1
+1
+2
+3
+5
+8
+```
+
+**Observation:**
+- ✅ Message intro affiché
+- ✅ Nombres Fibonacci affichés correctement
+- ✅ Conversion automatique par printf
+- ✅ Pas besoin de conversion manuelle vers ASCII
+
+## Quick Reference
+
+### Importer Fonction Externe
+
+```nasm
+global  _start
+extern  function_name
+```
+
+### Pattern Appel de Fonction
+
+```nasm
+procedure:
+    ; 1. Sauvegarder registres
+    push rax
+    push rbx
+    
+    ; 2. Arguments dans registres
+    mov rdi, arg1
+    mov rsi, arg2
+    
+    ; 3. Vérifier Stack Alignment (16-byte boundary)
+    ; (déjà aligné dans notre cas)
+    
+    ; 4. Appeler fonction
+    call function
+    
+    ; 5. Restaurer registres
+    pop rbx
+    pop rax
+    ret
+```
+
+### Stack Alignment
+
+```nasm
+; Si besoin d'ajuster:
+sub rsp, N      ; Ajouter N bytes
+call function
+add rsp, N      ; Retirer N bytes
+```
+
+**N = Nombre pour atteindre multiple de 16**
+
+### Dynamic Linking
+
+```bash
+# Assemblage
+nasm -f elf64 file.s
+
+# Linkage avec libc
+ld file.o -o file -lc --dynamic-linker /lib64/ld-linux-x86-64.so.2
+
+# Exécution
+./file
+```
+
+## Différences Syscall vs Function
+
+| Aspect | Syscall | Function |
+|--------|---------|----------|
+| **Numéro/Nom** | Numéro dans rax | Appel direct avec call |
+| **Arguments** | Registres (rdi, rsi, rdx) | Registres (rdi, rsi, rdx) |
+| **Stack Alignment** | ❌ Pas nécessaire | ✅ Requis (16-byte) |
+| **Import** | Pas d'import | extern requis |
+| **Linking** | Pas de flag spécial | -lc --dynamic-linker requis |
+
+## Résumé Registres pour Arguments
+
+| Argument | Registre |
+|----------|----------|
+| 1er | rdi |
+| 2ème | rsi |
+| 3ème | rdx |
+| 4ème | rcx |
+| 5ème | r8 |
+| 6ème | r9 |
+| **Retour** | **rax** |
+
+
+## Avantage printf
+
+**Sans printf:**
+- Conversion nombre → ASCII compliquée
+- Beaucoup de code manuel
+- Erreurs possibles
+
+**Avec printf:**
+- ✅ Conversion automatique
+- ✅ Code simple et court
+- ✅ Fiable et testé
+
+> **Note du cours:** "printf made it very easy to print our Fibonacci number without worrying about converting it to the proper format, like we had to with the write syscall."
+
+
+
+
+
+
