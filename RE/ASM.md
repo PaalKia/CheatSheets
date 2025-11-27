@@ -6415,7 +6415,283 @@ ld file.o -o file -lc --dynamic-linker /lib64/ld-linux-x86-64.so.2
 
 > **Note du cours:** "printf made it very easy to print our Fibonacci number without worrying about converting it to the proper format, like we had to with the write syscall."
 
+---
 
+# Fonctions Libc
+
+## Objectif
+
+**Actuellement:** Programme statique (affiche toujours Fibonacci < 10)
+
+**Amélioration:** Programme dynamique → Demander max à l'utilisateur
+
+**Solution:** Fonction `scanf` de libc
+
+## Rappel: Function Calling Convention
+
+```
+1. Save Registers on the Stack (Caller Saved)
+2. Pass Function Arguments (like syscalls)
+3. Fix Stack Alignment
+4. Get Functions' Return Value (in rax)
+```
+## Import scanf
+
+```nasm
+global  _start
+extern  printf, scanf
+```
+## Procédure getInput
+
+### Structure de Base
+
+```nasm
+getInput:
+    ; call scanf
+```
+
+## Étape 1: Sauvegarder Registres
+
+> "As we are at the beginning of our program and have not yet used any register, we don't have to worry about saving registers to the Stack."
+
+**Résultat:** Pas de push nécessaire ici
+
+## Étape 2: Arguments de scanf
+
+### Trouver les Arguments
+
+```bash
+$ man -s 3 scanf
+
+int scanf(const char *format, ...);
+```
+
+**2 Arguments:**
+1. Format d'entrée
+2. Buffer pour stocker l'input
+
+### Variables Nécessaires
+
+**section .data:**
+```nasm
+section .data
+    message db "Please input max Fn", 0x0a
+    outFormat db  "%d", 0x0a, 0x00
+    inFormat db  "%d", 0x00
+```
+
+**section .bss:**
+```nasm
+section .bss
+    userInput resb 1
+```
+
+> **Note:** "Uninitialized buffer space must be stored in the .bss memory segment."
+
+**resb 1** = Réserve 1 byte de buffer space
+
+### Placer Arguments
+
+```nasm
+getInput:
+    mov rdi, inFormat   ; set 1st parameter (inFormat)
+    mov rsi, userInput  ; set 2nd parameter (userInput)
+```
+## Étape 3: Stack Alignment
+
+**État actuel:**
+- 1 call (getInput) = 8 bytes
+- 0 push = 0 bytes
+- **Total:** 8 bytes (pas multiple de 16 ❌)
+
+**Solution:**
+```nasm
+getInput:
+    sub rsp, 8          ; align stack to 16-bytes
+    ; call scanf
+    add rsp, 8          ; restore stack alignment
+```
+
+**Alternative:** `push rax` (même effet)
+
+## Étape 4: Appel scanf
+
+### Code Complet getInput
+
+```nasm
+getInput:
+    sub rsp, 8          ; align stack to 16-bytes
+    mov rdi, inFormat   ; set 1st parameter (inFormat)
+    mov rsi, userInput  ; set 2nd parameter (userInput)
+    call scanf          ; scanf(inFormat, userInput)
+    add rsp, 8          ; restore stack alignment
+    ret
+```
+
+## Intégration dans _start
+
+```nasm
+section .text
+_start:
+    call printMessage   ; print intro message
+    call getInput       ; get max number
+    call initFib        ; set initial Fib values
+    call loopFib        ; calculate Fib numbers
+    call Exit           ; Exit the program
+```
+
+## Utiliser l'Input Utilisateur
+
+### Modification dans loopFib
+
+**Avant:**
+```nasm
+cmp rbx, 10         ; Valeur statique
+```
+
+**Après:**
+```nasm
+cmp rbx, [userInput]    ; Valeur dynamique de l'utilisateur
+js loopFib
+```
+
+> **Note:** "We used [userInput] instead of userInput, as we wanted to compare with the final value, and not with the pointer address."
+
+**[userInput]** = Valeur  
+**userInput** = Adresse
+
+## Code Final Complet
+
+```nasm
+global  _start
+extern  printf, scanf
+
+section .data
+    message db "Please input max Fn", 0x0a
+    outFormat db  "%d", 0x0a, 0x00
+    inFormat db  "%d", 0x00
+
+section .bss
+    userInput resb 1
+
+section .text
+_start:
+    call printMessage   ; print intro message
+    call getInput       ; get max number
+    call initFib        ; set initial Fib values
+    call loopFib        ; calculate Fib numbers
+    call Exit           ; Exit the program
+
+printMessage:
+    ...SNIP...
+
+getInput:
+    sub rsp, 8          ; align stack to 16-bytes
+    mov rdi, inFormat   ; set 1st parameter (inFormat)
+    mov rsi, userInput  ; set 2nd parameter (userInput)
+    call scanf          ; scanf(inFormat, userInput)
+    add rsp, 8          ; restore stack alignment
+    ret
+
+initFib:
+    ...SNIP...
+
+printFib:
+    ...SNIP...
+
+loopFib:
+    ...SNIP...
+    cmp rbx,[userInput] ; do rbx - userInput
+    js loopFib          ; jump if result is <0
+    ret
+
+Exit:
+    ...SNIP...
+```
+## Test avec Dynamic Linker
+
+### Exécution
+
+```bash
+$ nasm -f elf64 fib.s && \
+  ld fib.o -o fib -lc --dynamic-linker /lib64/ld-linux-x86-64.so.2 && \
+  ./fib
+```
+
+### Output
+
+```
+Please input max Fn:
+100
+1
+1
+2
+3
+5
+8
+13
+21
+34
+55
+89
+```
+
+**Résultat:** ✅ Programme fonctionne avec input utilisateur
+
+## Quick Reference
+
+### scanf Pattern
+
+```nasm
+; Import
+extern scanf
+
+; Variables
+section .data
+    inFormat db "%d", 0x00
+section .bss
+    buffer resb 1
+
+; Appel
+getInput:
+    sub rsp, 8              ; Aligner stack
+    mov rdi, inFormat
+    mov rsi, buffer
+    call scanf
+    add rsp, 8              ; Restaurer stack
+    ret
+```
+
+### Utiliser Input
+
+```nasm
+cmp reg, [buffer]    ; Comparer avec valeur
+; PAS: cmp reg, buffer (comparerait avec adresse!)
+```
+
+## Points Clés
+
+### scanf
+1. Format: `"%d"` pour entier
+2. Buffer: Dans `.bss` avec `resb`
+3. Arguments: format (rdi), buffer (rsi)
+
+### .bss Segment
+1. Pour buffers **non-initialisés**
+2. `resb N` réserve N bytes
+3. Différent de `.data` (initialisé)
+
+### Stack Alignment
+1. Calculer: push + call (8 bytes chacun)
+2. Doit être multiple de 16
+3. Ajuster avec sub/add rsp
+
+### Pointeurs
+1. `[userInput]` = **valeur** dans userInput
+2. `userInput` = **adresse** de userInput
+3. Toujours utiliser [] pour valeur
+
+---
 
 
 
